@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "id": "crowmap",
+  "version": "${version}",
+  "name": "CrowMap",
+  "description": "A Dynmap Utility Mod for Minecraft 1.21.11.",
+  "authors": [],
+  "contact": {},
+  "license": "All-Rights-Reserved",
+  "icon": "assets/crowmap/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "fabric-datagen": [
+      "dev.diena.crowmap.client.CrowmapDataGenerator"
+    ],
+    "client": [
+      "dev.diena.crowmap.client.CrowmapClient"
+    ],
+    "main": [
+      "dev.diena.crowmap.Crowmap"
+    ]
+  },
+  "mixins": [
+    "crowmap.mixins.json",
+    {
+      "config": "crowmap.client.mixins.json",
+      "environment": "client"
+    }
+  ],
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "fabric-language-kotlin": ">=${kotlin_loader_version}",
+    "fabric-api": "*",
+    "minecraft": "${minecraft_version}"
+  }
+}
