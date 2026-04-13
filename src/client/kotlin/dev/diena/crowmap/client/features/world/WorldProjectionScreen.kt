@@ -12,7 +12,12 @@ import io.wispforest.owo.braid.display.DisplayQuad
 import io.wispforest.owo.braid.framework.instance.LeafWidgetInstance
 import io.wispforest.owo.braid.framework.instance.MouseListener
 import io.wispforest.owo.braid.framework.widget.LeafInstanceWidget
+import dev.diena.crowmap.client.screen.ContextPopup
+import net.minecraft.network.chat.Component
+import net.minecraft.world.level.ClipContext
+import net.minecraft.world.phys.HitResult
 import net.minecraft.world.phys.Vec3
+import java.util.OptionalDouble
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -56,10 +61,14 @@ object WorldProjectionScreen {
         // Create the braid widget that will render the browser content
         val widget = BrowserProjectionWidget()
 
+        // Use the capped browser resolution so the braid surface matches the
+        // actual browser texture (keeps 1:1 pixel mapping, avoids UV overflow).
+        val (bw, bh) = BrowserManager.computeBrowserSize()
+
         display = BraidDisplay(
             quad,
-            mc.window.width,//CrowmapConfig.projectionResWidth,
-            mc.window.height,//CrowmapConfig.projectionResHeight,
+            bw,
+            bh,
             widget
         ).renderAutomatically()
 
@@ -67,7 +76,7 @@ object WorldProjectionScreen {
         // and renders automatically
         BraidDisplayBinding.activate(display!!)
 
-        logger.info("World projection activated at ${CrowmapConfig.projectionPos}")
+        logger.info("World projection activated at ${CrowmapConfig.projectionPos} (display ${bw}x${bh})")
     }
 
     /**
@@ -80,6 +89,26 @@ object WorldProjectionScreen {
         display = null
     }
 
+    /** Timestamp (System.nanoTime) of the last resize — used to debounce. */
+    private var lastResizeNano = 0L
+    private const val RESIZE_DEBOUNCE_NS = 500_000_000L // 500 ms
+
+    /**
+     * Called by [BrowserManager] when the Minecraft window is resized.
+     * Recreates the display so the braid surface matches the new browser
+     * resolution and the quad scales with [CrowmapConfig.projectionWidth]/[CrowmapConfig.projectionHeight].
+     */
+    fun onWindowResize() {
+        if (!isActive) return
+        val now = System.nanoTime()
+        if (now - lastResizeNano < RESIZE_DEBOUNCE_NS) return
+        lastResizeNano = now
+        // Recreate: deactivate then activate picks up the new resolution + quad size
+        deactivate()
+        CrowmapConfig.projectionEnabled = true
+        activate()
+    }
+
     /**
      * Updates the quad position/rotation based on current config.
      */
@@ -87,16 +116,51 @@ object WorldProjectionScreen {
         display?.quad = buildQuadFromConfig()
     }
 
+    /** Max distance (blocks) the placement raycast will travel. */
+    internal const val PLACE_REACH = 6.0
+
     /**
-     * Sets the projection position to the player's current look target.
+     * Normalizes a yaw angle to the range [-180, 180).
+     */
+    internal fun normalizeYaw(yaw: Float): Float {
+        var y = yaw % 360f
+        if (y >= 180f) y -= 360f
+        if (y < -180f) y += 360f
+        return y
+    }
+
+    /**
+     * Sets the projection position to the block the player is looking at.
+     * Performs a block raycast so the projection collides with solid geometry
+     * instead of floating 3 blocks forward through the air.
      */
     fun setPositionFromPlayer() {
         val player = mc.player ?: return
-        val lookPos = player.position().add(0.0, player.eyeHeight.toDouble(), 0.0)
-            .add(player.lookAngle.scale(3.0))
+        val level = mc.level ?: return
 
-        CrowmapConfig.projectionPos = lookPos
-        CrowmapConfig.projectionYaw = player.yRot
+        val eyePos = player.getEyePosition(1f)
+        val lookVec = player.lookAngle
+        val endPos = eyePos.add(lookVec.scale(PLACE_REACH))
+
+        val hit = level.clip(
+            ClipContext(
+                eyePos,
+                endPos,
+                ClipContext.Block.OUTLINE,
+                ClipContext.Fluid.NONE,
+                player
+            )
+        )
+
+        val placePos = if (hit.type == HitResult.Type.BLOCK) {
+            hit.location
+        } else {
+            // Nothing hit — fall back to max reach
+            endPos
+        }
+
+        CrowmapConfig.projectionPos = placePos
+        CrowmapConfig.projectionYaw = normalizeYaw(player.yRot)
 
         if (isActive) {
             updateQuad()
@@ -128,8 +192,8 @@ object WorldProjectionScreen {
     private fun buildQuadFromConfig(): DisplayQuad {
         val pos = CrowmapConfig.projectionPos
         val yawRad = Math.toRadians(CrowmapConfig.projectionYaw.toDouble())
-        val w = CrowmapConfig.projectionWidth.toDouble()
-        val h = CrowmapConfig.projectionHeight.toDouble()
+        val w = CrowmapConfig.projectionWidth
+        val h = CrowmapConfig.projectionHeight
 
         // The "left" vector points horizontally perpendicular to the facing direction
         // (this defines the width of the quad along the surface plane)
@@ -167,84 +231,204 @@ class BrowserProjectionWidget : LeafInstanceWidget() {
  *
  * Implements MouseListener to receive mouse events dispatched by the braid display system's
  * built-in interaction handling (owo-lib mixins handle raycasting, click interception, and scroll):
- * - MC right-click (use) → braid button 0 (primary) → browser left-click
- * - MC left-click (attack) → braid button 1 (secondary) → browser right-click
+ * - MC right-click (use) → braid button 0 → browser left-click (primary browsing)
+ * - MC left-click (attack) → braid button 1 → open context popup
  * - Scroll wheel → forwarded directly
  * - Cursor position → updated each frame via raycasting
+ *
+ * Also renders a context popup directly on the braid surface (no separate screen).
  */
 class BrowserProjectionInstance(widget: BrowserProjectionWidget) :
     LeafWidgetInstance<BrowserProjectionWidget>(widget), MouseListener {
 
+    // ── Inline popup state ───────────────────────────────────────────────
+
+    private val logger = CrowmapClient.logger
+
+    /** Whether the inline popup is currently visible. */
+    private var popupVisible = false
+
+    /** Top-left X of the popup in surface-pixel space. */
+    private var popupX = 0
+    /** Top-left Y of the popup in surface-pixel space. */
+    private var popupY = 0
+
+    /** Resolved coordinates (null = still loading or not found). */
+    @Volatile private var jumpCoordX: Int? = null
+    @Volatile private var jumpCoordZ: Int? = null
+    /** True while the coordinate query is in-flight. */
+    @Volatile private var coordsLoading = false
+
+    // ── Popup layout (surface-pixel space) ───────────────────────────────
+
+    companion object {
+        private const val SCALE = 3
+        private const val BTN_W = 120 * SCALE
+        private const val BTN_H = 12 * SCALE
+        private const val PAD   = 4  * SCALE
+        private const val POPUP_W = BTN_W + PAD * 2
+        private const val POPUP_H = PAD + BTN_H + PAD + BTN_H + PAD
+
+        private const val BG_COLOR   = 0xDD000000.toInt()
+        private const val BTN_COLOR  = 0xFF333333.toInt()
+        private const val TEXT_COLOR = 0xFFFFFF
+    }
+
+    private val closeBtnTop get() = popupY + PAD
+    private val closeBtnBot get() = closeBtnTop + BTN_H
+    private val jumpBtnTop  get() = closeBtnBot + PAD
+    private val jumpBtnBot  get() = jumpBtnTop + BTN_H
+    private val btnLeft     get() = popupX + PAD
+    private val btnRight    get() = popupX + PAD + BTN_W
+
+    // ── Layout ───────────────────────────────────────────────────────────
+
     override fun doLayout(constraints: Constraints) {
-        // Fill all available space (the entire braid surface)
         transform.setSize(constraints.maxFiniteOrMinSize())
     }
 
+    override fun measureIntrinsicWidth(p0: Double): Double = 1.0
+    override fun measureIntrinsicHeight(p0: Double): Double = 1.0
+    override fun measureBaselineOffset(): OptionalDouble? = OptionalDouble.of(1.0)
+
+    // ── Drawing ──────────────────────────────────────────────────────────
+
     override fun draw(graphics: BraidGraphics) {
+        drawBrowserTexture(graphics)
+        if (popupVisible) drawPopup(graphics)
+    }
+
+    private fun drawBrowserTexture(graphics: BraidGraphics) {
         val browser = BrowserManager.browser ?: return
         if (!browser.isTextureReady) return
-
         val textureId = browser.textureLocation ?: return
         val renderer = browser.renderer
         val texW = renderer.textureWidth
         val texH = renderer.textureHeight
         if (texW <= 0 || texH <= 0) return
-
         val width = transform.width().toInt()
         val height = transform.height().toInt()
-
+        if (width <= 0 || height <= 0) return
         try {
             graphics.blit(
                 net.minecraft.client.renderer.RenderPipelines.GUI_TEXTURED,
                 textureId,
-                0, 0,           // destination x, y
-                0f, 0f,         // source u, v offset (pixel space)
-                width, height,  // destination width, height
-                texW, texH      // total texture dimensions
+                0, 0, 0f, 0f,
+                width, height, texW, texH, texW, texH
             )
-        } catch (_: IllegalStateException) {
-            // Texture view may not be fully initialized yet
+        } catch (_: Exception) { }
+    }
+
+    private fun drawPopup(graphics: BraidGraphics) {
+        graphics.fill(popupX, popupY, popupX + POPUP_W, popupY + POPUP_H, BG_COLOR)
+
+        val textScale = SCALE.toFloat()
+
+        // Close button
+        graphics.fill(btnLeft, closeBtnTop, btnRight, closeBtnBot, BTN_COLOR)
+        val textY1 = closeBtnTop + (BTN_H - 9 * SCALE) / 2
+        graphics.drawText(
+            Component.literal("Close"),
+            (btnLeft + PAD).toFloat(), textY1.toFloat(),
+            textScale, TEXT_COLOR
+        )
+
+        // Jump button
+        graphics.fill(btnLeft, jumpBtnTop, btnRight, jumpBtnBot, BTN_COLOR)
+        val jumpLabel = when {
+            coordsLoading -> "Jump (scanning...)"
+            jumpCoordX != null && jumpCoordZ != null -> "Jump $jumpCoordX $jumpCoordZ"
+            else -> "Jump (no coords)"
+        }
+        val textY2 = jumpBtnTop + (BTN_H - 9 * SCALE) / 2
+        graphics.drawText(
+            Component.literal(jumpLabel),
+            (btnLeft + PAD).toFloat(), textY2.toFloat(),
+            textScale, TEXT_COLOR
+        )
+    }
+
+    // ── Popup lifecycle ──────────────────────────────────────────────────
+
+    private fun openPopup(clickX: Double, clickY: Double) {
+        val surfW = transform.width().toInt()
+        val surfH = transform.height().toInt()
+        popupX = (clickX - POPUP_W / 2.0).toInt().coerceIn(0, (surfW - POPUP_W).coerceAtLeast(0))
+        popupY = (clickY - POPUP_H / 2.0).toInt().coerceIn(0, (surfH - POPUP_H).coerceAtLeast(0))
+        popupVisible = true
+        jumpCoordX = null
+        jumpCoordZ = null
+        coordsLoading = true
+        ContextPopup.queryMapCoordinates(clickX.toInt(), clickY.toInt()).thenAccept { (x, z) ->
+            jumpCoordX = x
+            jumpCoordZ = z
+            coordsLoading = false
         }
     }
 
-    // --- Mouse event forwarding to MCEF browser ---
-
-    // Braid display button mapping (set by owo-lib's MinecraftMixin):
-    //   MC right-click (use key)  → braid button 0 (primary)
-    //   MC left-click (attack key) → braid button 1 (secondary)
-    // Browser button convention:
-    //   0 = left click, 1 = middle click, 2 = right click
-    // We map: braid 0 → browser 0 (left), braid 1 → browser 2 (right)
-    private fun mapButton(braidButton: Int): Int = when (braidButton) {
-        0 -> 0  // MC use (right-click) → browser left-click
-        1 -> 2  // MC attack (left-click) → browser right-click
-        else -> braidButton
+    private fun closePopup() {
+        popupVisible = false
+        coordsLoading = false
     }
+
+    private fun inButton(x: Double, y: Double, top: Int, bot: Int): Boolean {
+        return x >= btnLeft && x < btnRight && y >= top && y < bot
+    }
+
+    // --- Mouse event forwarding to MCEF browser ---
+    //
+    // Braid display button mapping (from owo-lib's MinecraftMixin):
+    //   MC left-click (attack key)  → braid button 0
+    //   MC right-click (use key)    → braid button 1
+    //
+    //   braid 0 (MC attack) → browser left-click (0) — primary browsing
+    //   braid 1 (MC use)    → open CrowMap context popup
 
     override fun onMouseDown(x: Double, y: Double, button: Int, modifiers: KeyModifiers): Boolean {
         val browser = BrowserManager.browser ?: return false
-        browser.sendMousePress(x.toInt(), y.toInt(), mapButton(button))
+
+        if (popupVisible) {
+            if (inButton(x, y, closeBtnTop, closeBtnBot)) { closePopup(); return true }
+            if (inButton(x, y, jumpBtnTop, jumpBtnBot)) {
+                val cx = jumpCoordX; val cz = jumpCoordZ
+                closePopup()
+                if (cx != null && cz != null) ContextPopup.executeJump(cx, cz)
+                return true
+            }
+            closePopup(); return true
+        }
+
+        // Braid button 1 (MC use / right-click) → open context popup
+        if (button == 0) { openPopup(x, y); return true }
+
+        // Braid button 0 (MC attack / left-click) → browser left-click
+        browser.sendMousePress(x.toInt(), y.toInt(), 2)
         return true
     }
 
     override fun onMouseUp(x: Double, y: Double, button: Int, modifiers: KeyModifiers): Boolean {
+        if (popupVisible) return true
+        //if (button == 1) return true
         val browser = BrowserManager.browser ?: return false
-        browser.sendMouseRelease(x.toInt(), y.toInt(), mapButton(button))
+        browser.sendMouseRelease(x.toInt(), y.toInt(), button)
         return true
     }
 
     override fun onMouseMove(x: Double, y: Double) {
+        if (popupVisible) return
         val browser = BrowserManager.browser ?: return
         browser.sendMouseMove(x.toInt(), y.toInt())
     }
 
     override fun onMouseScroll(mouseX: Double, mouseY: Double, xOffset: Double, yOffset: Double): Boolean {
+        if (popupVisible) return true
         val browser = BrowserManager.browser ?: return false
         browser.sendMouseWheel(mouseX.toInt(), mouseY.toInt(), yOffset)
         return true
     }
 
     override fun onMouseDrag(x: Double, y: Double, deltaX: Double, deltaY: Double) {
+        if (popupVisible) return
         val browser = BrowserManager.browser ?: return
         browser.sendMouseMove(x.toInt(), y.toInt())
     }

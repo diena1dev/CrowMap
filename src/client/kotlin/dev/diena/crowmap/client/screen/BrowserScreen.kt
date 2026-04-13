@@ -25,6 +25,10 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
     private val logger = CrowmapClient.logger
     private var browser: MCEFBrowser? = null
 
+    /** The browser resolution currently in use (capped at 1080p, aspect-correct). */
+    private var browserWidth = BrowserManager.MAX_BROWSER_WIDTH
+    private var browserHeight = BrowserManager.MAX_BROWSER_HEIGHT
+
     override fun createAdapter(): OwoUIAdapter<FlowLayout> {
         return OwoUIAdapter.create(this, UIContainers::verticalFlow)
     }
@@ -40,22 +44,23 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
     override fun init() {
         super.init()
 
-        // MCEF needs actual framebuffer pixel dimensions, not GUI-scaled dimensions
-        val pixelWidth = mc.window.width
-        val pixelHeight = mc.window.height
+        val (bw, bh) = BrowserManager.computeBrowserSize()
+        browserWidth = bw
+        browserHeight = bh
 
-        browser = BrowserManager.getOrCreateBrowser(pixelWidth, pixelHeight)
-        browser?.resize(pixelWidth, pixelHeight)
+        browser = BrowserManager.getOrCreateBrowser(browserWidth, browserHeight)
+        browser?.resize(browserWidth, browserHeight)
 
-        logger.info("BrowserScreen init: pixelSize=${pixelWidth}x${pixelHeight}, guiSize=${width}x${height}, browser=${browser != null}, mcefInit=${BrowserManager.initialized}")
+        logger.info("BrowserScreen init: browserRes=${browserWidth}x${browserHeight}, guiSize=${width}x${height}, window=${mc.window.width}x${mc.window.height}, browser=${browser != null}")
     }
 
     override fun resize(width: Int, height: Int) {
         super.resize(width, height)
-        // Resize the browser to the actual pixel dimensions
-        val pixelWidth = mc.window.width
-        val pixelHeight = mc.window.height
-        browser?.resize(pixelWidth, pixelHeight)
+
+        val (bw, bh) = BrowserManager.computeBrowserSize()
+        browserWidth = bw
+        browserHeight = bh
+        browser?.resize(browserWidth, browserHeight)
     }
 
     override fun render(context: GuiGraphics, mouseX: Int, mouseY: Int, delta: Float) {
@@ -69,14 +74,20 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
 
                 if (texW > 0 && texH > 0) {
                     try {
-                        // blit(RenderPipeline, Identifier, x, y, u, v, width, height, textureWidth, textureHeight)
+                        // blit(pipeline, atlas, x, y, u, v, width, height, uWidth, vHeight, texWidth, texHeight)
+                        //   x,y            = dest position on screen (GUI-scaled)
+                        //   u,v            = source offset in texture pixels
+                        //   width, height  = dest size (GUI-scaled screen)
+                        //   uWidth,vHeight = source region (full browser texture)
+                        //   texWidth,texHeight = total texture dimensions
                         context.blit(
                             RenderPipelines.GUI_TEXTURED,
                             textureId,
                             0, 0,                       // screen x, y
                             0f, 0f,                     // texture u, v offset
                             width, height,              // destination width, height
-                            width, height                  // total texture size
+                            texW, texH,                 // source region (full texture)
+                            texW, texH                  // total texture dimensions
                         )
                     } catch (_: IllegalStateException) {
                         // Texture view may not be fully initialized yet — show loading state
@@ -122,12 +133,27 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
     }
 
     // --- Mouse input forwarding ---
-    // MCEF expects pixel coordinates, so scale from GUI coords to pixel coords
+    // MCEF expects coordinates in the browser's resolution space, so scale from
+    // GUI-scaled coords to the capped browser resolution.
 
-    private fun scaleX(guiX: Double): Int = (guiX * mc.window.width / width).toInt()
-    private fun scaleY(guiY: Double): Int = (guiY * mc.window.height / height).toInt()
+    private fun scaleX(guiX: Double): Int = (guiX * browserWidth / width).toInt()
+    private fun scaleY(guiY: Double): Int = (guiY * browserHeight / height).toInt()
 
     override fun mouseClicked(event: MouseButtonEvent, isDoubleClick: Boolean): Boolean {
+        // Right-click (button 1) → open the CrowMap context popup
+        if (event.button() == GLFW.GLFW_MOUSE_BUTTON_RIGHT) {
+            ContextPopup.open(
+                screen = this,
+                root = uiAdapter.rootComponent,
+                browserPixelX = scaleX(event.x()),
+                browserPixelY = scaleY(event.y()),
+                guiX = event.x(),
+                guiY = event.y()
+            )
+            return true
+        }
+        // Let owo-ui handle the click first (e.g. an open dropdown button).
+        // Only forward to the browser if nothing in the UI tree consumed it.
         browser?.sendMousePress(scaleX(event.x()), scaleY(event.y()), event.button())
         if (super.mouseClicked(event, isDoubleClick)) return true
         return true

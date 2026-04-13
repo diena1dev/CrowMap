@@ -1,52 +1,122 @@
 package dev.diena.crowmap.client.config
 
-import dev.diena.crowmap.client.CrowmapClient.Companion.mc
 import net.minecraft.world.phys.Vec3
 
 /**
- * Configuration for the CrowMap mod.
+ * Convenience façade for the owo-lib managed config.
+ *
+ * [CrowmapConfigWrapper] is generated at compile-time from [CrowmapConfigModel]
+ * by owo-lib's annotation processor.  This object re-exports the values with the
+ * same property-style API the rest of the codebase already uses, so callers don't
+ * need to change.
  */
 object CrowmapConfig {
 
-    /** The URL to load in the browser. */
-    var mapUrl: String = "https://survival.horizonsend.net/"
+    /** The generated wrapper – created once on first access, loads from disk. */
+    val wrapper: CrowmapConfigWrapper by lazy { CrowmapConfigWrapper.createAndLoad() }
 
-    /** Whether the HUD minimap overlay is enabled. */
-    var hudEnabled: Boolean = true
+    /** Shorthand. */
+    private val W get() = wrapper
 
-    /** Which corner to display the HUD minimap in. */
-    var hudCorner: HudCorner = HudCorner.TOP_RIGHT
+    /** Persists all current values to disk. */
+    fun save() = W.save()
 
-    /** The size (in pixels) of the HUD minimap square. */
-    var hudSize: Int = 128
+    // ── Browser ──────────────────────────────────────────────────────────
 
-    /** Margin from the screen edge for the HUD minimap. */
-    var hudMargin: Int = 8
+    var mapUrl: String
+        get() = W.mapUrl()
+        set(value) = W.mapUrl(value)
 
-    /** Whether the in-world projection is enabled. */
-    var projectionEnabled: Boolean = false
+    // ── HUD ──────────────────────────────────────────────────────────────
 
-    /** The world position of the projection's bottom-left corner. */
-    var projectionPos: Vec3 = Vec3(0.0, 70.0, 0.0)
+    var hudEnabled: Boolean
+        get() = W.hudEnabled()
+        set(value) = W.hudEnabled(value)
 
-    /** The direction the projection faces (yaw in degrees). */
-    var projectionYaw: Float = 0f
+    var hudCorner: CrowmapConfigModel.HudCorner
+        get() = W.hudCorner()
+        set(value) = W.hudCorner(value)
 
-    /** Width of the in-world projection in blocks. */
-    val projectionWidth: Float get() = mc.window.width.toFloat()/100
+    var hudSize: Int
+        get() = W.hudSize()
+        set(value) = W.hudSize(value)
 
-    /** Height of the in-world projection in blocks. */
-    val projectionHeight: Float get() = mc.window.height.toFloat()/100
+    var hudMargin: Int
+        get() = W.hudMargin()
+        set(value) = W.hudMargin(value)
 
-    /** Resolution of the braid display surface for in-world projection. */
-    var projectionResWidth: Int = 640
-    var projectionResHeight: Int = 480
+    // ── Projection ───────────────────────────────────────────────────────
 
-    enum class HudCorner {
-        TOP_LEFT,
-        TOP_RIGHT,
-        BOTTOM_LEFT,
-        BOTTOM_RIGHT
+    var projectionEnabled: Boolean
+        get() = W.projectionEnabled()
+        set(value) = W.projectionEnabled(value)
+
+    /** Absolute scale of the projection in blocks (width spans this many blocks). */
+    var projectionScale: Double
+        get() = W.projectionScale()
+        set(value) = W.projectionScale(value)
+
+    /** Projection position as a Vec3 (backed by three stored doubles). */
+    var projectionPos: Vec3
+        get() = Vec3(W.projectionX(), W.projectionY(), W.projectionZ())
+        set(value) {
+            W.projectionX(value.x)
+            W.projectionY(value.y)
+            W.projectionZ(value.z)
+        }
+
+    var projectionYaw: Float
+        get() = W.projectionYaw()
+        set(value) = W.projectionYaw(value)
+
+    var projectionPitch: Float
+        get() = W.projectionPitch()
+        set(value) = W.projectionPitch(value)
+
+    /** Width of the in-world projection in blocks (matches [projectionScale]). */
+    val projectionWidth: Double get() = projectionScale
+
+    /** Height of the in-world projection in blocks (aspect-correct from browser resolution). */
+    val projectionHeight: Double get() {
+        val (bw, bh) = dev.diena.crowmap.client.features.browser.BrowserManager.computeBrowserSize()
+        return projectionScale * bh.toDouble() / bw.toDouble()
     }
+
+    // ── Anchor ───────────────────────────────────────────────────────────
+
+    var anchorEnabled: Boolean
+        get() = W.anchorEnabled()
+        set(value) = W.anchorEnabled(value)
+
+    /** The text that identifies the anchor sign (matched against any line, front or back). */
+    var anchorText: String
+        get() = W.anchorText()
+        set(value) = W.anchorText(value)
+
+    /** Offset from the anchor sign's position to the projection origin. */
+    var anchorOffset: Vec3
+        get() = Vec3(W.anchorOffsetX(), W.anchorOffsetY(), W.anchorOffsetZ())
+        set(value) {
+            W.anchorOffsetX(value.x)
+            W.anchorOffsetY(value.y)
+            W.anchorOffsetZ(value.z)
+        }
+
+    var anchorOffsetYaw: Float
+        get() = W.anchorOffsetYaw()
+        set(value) = W.anchorOffsetYaw(value)
+
+    var anchorOffsetPitch: Float
+        get() = W.anchorOffsetPitch()
+        set(value) = W.anchorOffsetPitch(value)
+
+    /** The Y-rotation (degrees) of the sign face when the offset was stored.
+     *  Used to rotate the offset when the anchor sign faces a different direction. */
+    var anchorReferenceAngle: Float
+        get() = W.anchorReferenceAngle()
+        set(value) = W.anchorReferenceAngle(value)
+
+    // Re-export the enum so existing `CrowmapConfig.HudCorner` references compile.
+    typealias HudCorner = CrowmapConfigModel.HudCorner
 }
 

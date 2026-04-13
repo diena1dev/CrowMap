@@ -7,7 +7,7 @@
   "authors": [],
   "contact": {},
   "license": "All-Rights-Reserved",
-  "icon": "assets/crowmap/icon.png",
+  "icon": "assets/crowmap/crowmap.png",
   "environment": "client",
   "entrypoints": {
     "fabric-datagen": [

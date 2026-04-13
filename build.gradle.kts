@@ -4,6 +4,7 @@ import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 plugins {
     kotlin("jvm") version "2.3.0"
     id("fabric-loom") version "1.16-SNAPSHOT"
+    kotlin("kapt") version "2.3.0"
     id("maven-publish")
 }
 
@@ -65,6 +66,19 @@ dependencies {
     modImplementation("net.fabricmc.fabric-api:fabric-api:${project.property("fabric_version")}")
     modImplementation("com.github.CCBlueX:mcef:3.1.6-1.21.11")
     modImplementation("io.wispforest:owo-lib:0.13.0-alpha.16+1.21.11")
+    // owo-lib annotation processor – generates CrowmapConfigWrapper from CrowmapConfigModel.
+    // Uses kapt so the generated wrapper is visible during Kotlin compilation.
+    kapt("io.wispforest:owo-lib:0.13.0-alpha.16+1.21.11")
+    // The config model lives in the 'client' source set, so kapt must run there too.
+    "kaptClient"("io.wispforest:owo-lib:0.13.0-alpha.16+1.21.11")
+
+    implementation("com.squareup.okhttp3:okhttp:5.3.2")
+    implementation("com.squareup.okio:okio:3.17.0")
+
+    include("com.squareup.okio:okio:3.17.0")
+    include("com.squareup.okhttp3:okhttp:5.3.2")
+    include("com.github.CCBlueX:mcef:3.1.6-1.21.11")
+    include("io.wispforest:owo-lib:0.13.0-alpha.16+1.21.11")
 }
 
 tasks.processResources {

@@ -70,15 +70,19 @@ object MapHudOverlay : HudElement {
 
         // Render the center-cropped portion of the browser texture
         try {
-            // blit(RenderPipeline, Identifier, x, y, u, v, width, height, texWidth, texHeight)
-            // u,v are the source offset in pixels; width,height is both dest size and source crop size
-            // texWidth,texHeight are total texture dimensions for UV normalization
+            // blit(pipeline, atlas, x, y, u, v, width, height, uWidth, vHeight, texWidth, texHeight)
+            //   x,y           = destination position on screen
+            //   u,v           = source UV offset in texture pixels
+            //   width,height  = destination size on screen (the HUD square)
+            //   uWidth,vHeight= source region size in texture pixels (the crop)
+            //   texWidth,texHeight = total texture dimensions for UV normalisation
             context.blit(
                 RenderPipelines.GUI_TEXTURED,
                 textureId,
                 screenX, screenY,                      // destination x, y
                 cropX.toFloat(), cropY.toFloat(),      // source u, v offset
-                size, size,                            // destination width, height (also source crop)
+                size, size,                            // destination width, height
+                cropSize, cropSize,                    // source region (full center square)
                 texWidth, texHeight                    // total texture dimensions
             )
         } catch (_: IllegalStateException) {
