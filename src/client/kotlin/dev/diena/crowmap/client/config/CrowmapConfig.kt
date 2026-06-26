@@ -27,6 +27,28 @@ object CrowmapConfig {
         get() = W.mapUrl()
         set(value) = W.mapUrl(value)
 
+    var useLocalLiveAtlas: Boolean
+        get() = W.useLocalLiveAtlas()
+        set(value) = W.useLocalLiveAtlas(value)
+
+    var debugLogging: Boolean
+        get() = W.debugLogging()
+        set(value) = W.debugLogging(value)
+
+    // ── LiveAtlas UI ──────────────────────────────────────────────────────
+
+    var liveAtlasPlayersAboveMarkers: Boolean
+        get() = W.liveAtlasPlayersAboveMarkers()
+        set(value) = W.liveAtlasPlayersAboveMarkers(value)
+
+    var liveAtlasPlayersSearch: Boolean
+        get() = W.liveAtlasPlayersSearch()
+        set(value) = W.liveAtlasPlayersSearch(value)
+
+    var liveAtlasCompactPlayerMarkers: Boolean
+        get() = W.liveAtlasCompactPlayerMarkers()
+        set(value) = W.liveAtlasCompactPlayerMarkers(value)
+
     // ── HUD ──────────────────────────────────────────────────────────────
 
     var hudEnabled: Boolean

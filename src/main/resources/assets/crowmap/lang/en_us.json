@@ -1,0 +1,68 @@
+{
+  "_comment": "owo-lib keys: text.config.<name>.section.<@SectionHeader exact> | .option.<field> | .option.<field>.tooltip | .enum.<uncapClass>.<VALUE>",
+
+  "text.config.crowmap-config.title": "CrowMap",
+
+  "text.config.crowmap-config.section.Browser": "Browser",
+  "text.config.crowmap-config.option.mapUrl": "Map URL",
+  "text.config.crowmap-config.option.mapUrl.tooltip": "URL of the Dynmap instance to load.",
+  "text.config.crowmap-config.option.useLocalLiveAtlas": "Use Local LiveAtlas",
+  "text.config.crowmap-config.option.useLocalLiveAtlas.tooltip": "Hosts LiveAtlas locally and proxies all Dynmap requests through it, replacing the default Dynmap UI. Downloads ~150 KB on first use. Disable on low-end hardware.",
+  "text.config.crowmap-config.option.debugLogging": "Debug Logging",
+  "text.config.crowmap-config.option.debugLogging.tooltip": "Log verbose diagnostic messages. Enable when troubleshooting browser or projection issues.",
+
+  "text.config.crowmap-config.section.LiveAtlas": "LiveAtlas",
+  "text.config.crowmap-config.option.liveAtlasPlayersAboveMarkers": "Players Above Markers",
+  "text.config.crowmap-config.option.liveAtlasPlayersAboveMarkers.tooltip": "Render player icons above other map markers.",
+  "text.config.crowmap-config.option.liveAtlasPlayersSearch": "Player Search",
+  "text.config.crowmap-config.option.liveAtlasPlayersSearch.tooltip": "Show the search bar in the player list.",
+  "text.config.crowmap-config.option.liveAtlasCompactPlayerMarkers": "Compact Player Markers",
+  "text.config.crowmap-config.option.liveAtlasCompactPlayerMarkers.tooltip": "Use pre-2.0 style compact player markers.",
+  "text.config.crowmap-config.option.liveAtlasDisableContextMenu": "Disable Context Menu",
+  "text.config.crowmap-config.option.liveAtlasDisableContextMenu.tooltip": "Disable the right-click context menu on the map.",
+  "text.config.crowmap-config.option.liveAtlasDisableMarkerUI": "Disable Marker UI",
+  "text.config.crowmap-config.option.liveAtlasDisableMarkerUI.tooltip": "Hide the markers button and list entirely.",
+
+  "text.config.crowmap-config.section.HUD": "HUD",
+  "text.config.crowmap-config.option.hudEnabled": "Enable HUD",
+  "text.config.crowmap-config.option.hudEnabled.tooltip": "Show a live minimap in the corner of the screen.",
+  "text.config.crowmap-config.option.hudCorner": "Corner",
+  "text.config.crowmap-config.option.hudCorner.tooltip": "Which corner of the screen the minimap appears in.",
+  "text.config.crowmap-config.option.hudSize": "Size",
+  "text.config.crowmap-config.option.hudSize.tooltip": "Side length of the minimap in pixels.",
+  "text.config.crowmap-config.option.hudMargin": "Margin",
+  "text.config.crowmap-config.option.hudMargin.tooltip": "Gap between the minimap and the screen edge in pixels.",
+  "text.config.crowmap-config.enum.hudCorner.top_left": "Top Left",
+  "text.config.crowmap-config.enum.hudCorner.top_right": "Top Right",
+  "text.config.crowmap-config.enum.hudCorner.bottom_left": "Bottom Left",
+  "text.config.crowmap-config.enum.hudCorner.bottom_right": "Bottom Right",
+
+  "text.config.crowmap-config.section.Projection": "World Projection",
+  "text.config.crowmap-config.option.projectionEnabled": "Enable Projection",
+  "text.config.crowmap-config.option.projectionEnabled.tooltip": "Project the map as a flat panel in the world. Use the 'Place World Map' keybind to position it, and 'Toggle World Map' to show or hide it.",
+  "text.config.crowmap-config.option.projectionScale": "Panel Width (blocks)",
+  "text.config.crowmap-config.option.projectionScale.tooltip": "Width of the projected map panel in blocks. Height scales automatically to match the browser aspect ratio.",
+
+  "text.config.crowmap-config.section.Anchor": "Sign Anchor",
+  "text.config.crowmap-config.option.anchorEnabled": "Enable Sign Anchor",
+  "text.config.crowmap-config.option.anchorEnabled.tooltip": "Tie the world projection to a sign instead of a fixed position. Stand next to a matching sign and press 'Place World Map' to store the offset. The projection will follow the sign's position even after you move away.",
+  "text.config.crowmap-config.option.anchorText": "Sign Text",
+  "text.config.crowmap-config.option.anchorText.tooltip": "Text that identifies the anchor sign. Matched against any line on the front or back of a sign.",
+
+  "text.config.crowmap-config.section.Overlay": "Overlay",
+  "text.config.crowmap-config.option.overlayMode": "Keybind Mode",
+  "text.config.crowmap-config.option.overlayMode.tooltip": "Hold: overlay is visible while the key is held down. Toggle: press once to show, press again to hide.",
+  "text.config.crowmap-config.option.overlayScale": "Scale",
+  "text.config.crowmap-config.option.overlayScale.tooltip": "Display size multiplier for the overlay image. 1.0 = fits the screen exactly.",
+  "text.config.crowmap-config.enum.overlayMode.hold": "Hold",
+  "text.config.crowmap-config.enum.overlayMode.toggle": "Toggle",
+
+  "crowmap.gui.open_config": "CrowMap Settings",
+
+  "key.category.crowmap.keybindings": "CrowMap",
+  "key.crowmap.open_map": "Open Map",
+  "key.crowmap.place_projection": "Place World Map",
+  "key.crowmap.toggle_projection": "Toggle World Map",
+  "key.crowmap.toggle_hud": "Toggle HUD Map",
+  "key.crowmap.show_overlay": "Show Overlay"
+}

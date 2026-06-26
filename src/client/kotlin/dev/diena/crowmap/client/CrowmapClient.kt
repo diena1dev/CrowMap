@@ -4,6 +4,7 @@ import dev.diena.crowmap.client.config.CrowmapConfig
 import dev.diena.crowmap.client.features.browser.BrowserManager
 import dev.diena.crowmap.client.features.hud.MapHudOverlay
 import dev.diena.crowmap.client.features.hud.OverlayHud
+import dev.diena.crowmap.client.features.liveatlas.LocalLiveAtlasServer
 import dev.diena.crowmap.client.features.world.SignAnchorTracker
 import net.fabricmc.api.ClientModInitializer
 import dev.diena.crowmap.client.config.Keybindings
@@ -15,6 +16,10 @@ class CrowmapClient : ClientModInitializer {
         val mc: Minecraft = Minecraft.getInstance()
         val logger = LogManager.getLogger("Crowmap")
         val namespace = "crowmap"
+
+        fun debug(message: String) {
+            if (CrowmapConfig.debugLogging) logger.info("[DEBUG] $message")
+        }
     }
 
     override fun onInitializeClient() {
@@ -23,6 +28,15 @@ class CrowmapClient : ClientModInitializer {
 
         // Initialize keybindings
         Keybindings().init()
+
+        // Start local LiveAtlas server if enabled; register watcher for runtime toggles
+        if (CrowmapConfig.useLocalLiveAtlas) {
+            LocalLiveAtlasServer.startAsync { BrowserManager.navigate(LocalLiveAtlasServer.localUrl) }
+        }
+        LocalLiveAtlasServer.registerConfigWatcher(
+            onEnable  = { url -> BrowserManager.navigate(url) },
+            onDisable = { BrowserManager.navigate(CrowmapConfig.mapUrl) }
+        )
 
         // Initialize MCEF browser backend
         BrowserManager.init()

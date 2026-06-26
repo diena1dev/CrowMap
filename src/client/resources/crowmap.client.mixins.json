@@ -4,6 +4,7 @@
   "package": "dev.diena.crowmap.mixin.client",
   "compatibilityLevel": "JAVA_21",
   "client": [
+    "PauseScreenMixin"
   ],
   "injectors": {
     "defaultRequire": 1
