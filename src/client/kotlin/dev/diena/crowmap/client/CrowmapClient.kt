@@ -93,6 +93,13 @@ class CrowmapClient : ClientModInitializer {
                     "}"
         )
 
+        // Suppress Leaflet hover tooltips on map regions — they obscure the map and
+        // the same info is available by clicking the region (which opens the popup).
+        BrowserManager.injectCss(
+            "hide-leaflet-tooltips",
+            ".leaflet-tooltip { display: none !important; }"
+        )
+
         // Register the HUD minimap overlay
         MapHudOverlay.register()
         OverlayHud.register()

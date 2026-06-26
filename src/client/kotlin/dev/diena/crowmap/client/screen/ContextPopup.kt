@@ -138,15 +138,36 @@ object ContextPopup {
     ): java.util.concurrent.CompletableFuture<Pair<Int?, Int?>> {
         val js = """
             (function() {
-                // Strategy 1: Dynmap Leaflet — convert the pixel position to world coords
+                var pixelX = $pixelX, pixelY = $pixelY;
+
+                // Strategy 1: LiveAtlas — access Vuex store via Vue 3 app instance.
+                // Uses the same currentMap.latLngToLocation() path the coordinate control uses.
+                try {
+                    var appEl = document.querySelector('#app');
+                    if (appEl && appEl.__vue_app__) {
+                        var store = appEl.__vue_app__.config.globalProperties.${'$'}store;
+                        var currentMap = store && store.state && store.state.currentMap;
+                        var leafletContainer = document.querySelector('.leaflet-container');
+                        var leafletMap = leafletContainer && leafletContainer._leaflet_map;
+                        if (currentMap && leafletMap) {
+                            var rect = leafletMap.getContainer().getBoundingClientRect();
+                            var latlng = leafletMap.containerPointToLatLng(
+                                L.point(pixelX - rect.left, pixelY - rect.top)
+                            );
+                            var seaLevel = store.state.currentWorld ? store.state.currentWorld.seaLevel + 1 : 64;
+                            var loc = currentMap.latLngToLocation(latlng, seaLevel);
+                            if (loc && typeof loc.x === 'number') {
+                                return Math.round(loc.x) + ',' + Math.round(loc.z);
+                            }
+                        }
+                    }
+                } catch (_) {}
+
+                // Strategy 2: Dynmap — window.dynmap exposes the Leaflet map and projection.
                 if (window.dynmap && window.dynmap.map) {
                     var map = window.dynmap.map;
-                    // Account for the map container offset in the page
-                    var container = map.getContainer();
-                    var rect = container.getBoundingClientRect();
-                    var point = L.point($pixelX - rect.left, $pixelY - rect.top);
-                    var latlng = map.containerPointToLatLng(point);
-                    // Dynmap's projection converts lat/lng back to world X/Z
+                    var rect = map.getContainer().getBoundingClientRect();
+                    var latlng = map.containerPointToLatLng(L.point(pixelX - rect.left, pixelY - rect.top));
                     var proj = window.dynmap.getProjection
                              ? window.dynmap.getProjection()
                              : (window.dynmap.maptype && window.dynmap.maptype.getProjection
@@ -156,20 +177,25 @@ object ContextPopup {
                         var loc = proj.fromLatLngToLocation(latlng, 64);
                         return Math.round(loc.x) + ',' + Math.round(loc.z);
                     }
-                    // Fallback: use raw latlng (Dynmap flat maps use lng=X, lat=-Z)
                     return Math.round(latlng.lng) + ',' + Math.round(-latlng.lat);
                 }
-                // Strategy 2: Parse URL hash   e.g. #world;flat;123,64,-456,4
-                var hash = window.location.hash;
-                var m = hash.match(/(-?\d+),\s*-?\d+,\s*(-?\d+)/);
-                if (m) return m[1] + ',' + m[2];
-                // Strategy 3: Look for a coordinate display element
-                var el = document.querySelector('.coord-control, .leaflet-control-coordinates, [class*="coord"]');
-                if (el) {
-                    var txt = el.innerText || '';
-                    var cm = txt.match(/(-?\d+)[,\s]+(-?\d+)/);
-                    if (cm) return cm[1] + ',' + cm[2];
+
+                // Strategy 3: Coordinate display element (LiveAtlas renders .leaflet-control-coordinates
+                // bottom-left; shows last hovered position which is close enough for a right-click).
+                var coordEl = document.querySelector('.leaflet-control-coordinates');
+                if (coordEl) {
+                    var txt = coordEl.textContent || '';
+                    // LiveAtlas "X: 123, Z: 456" or plain "123, 456"
+                    var xz = txt.match(/X:\s*(-?\d+).*?Z:\s*(-?\d+)/);
+                    if (xz) return xz[1] + ',' + xz[2];
+                    var plain = txt.match(/(-?\d+)[^-\d]+(-?\d+)/);
+                    if (plain) return plain[1] + ',' + plain[2];
                 }
+
+                // Strategy 4: URL hash (Dynmap format #world;flat;x,y,z,zoom)
+                var m = window.location.hash.match(/(-?\d+),\s*-?\d+,\s*(-?\d+)/);
+                if (m) return m[1] + ',' + m[2];
+
                 return '';
             })()
         """.trimIndent()
