@@ -3,6 +3,7 @@ package dev.diena.crowmap.client.screen
 import dev.diena.crowmap.client.CrowmapClient
 import dev.diena.crowmap.client.features.browser.BrowserManager
 import io.wispforest.owo.ui.base.BaseOwoScreen
+import io.wispforest.owo.ui.component.DropdownComponent
 import io.wispforest.owo.ui.container.FlowLayout
 import io.wispforest.owo.ui.container.UIContainers
 import io.wispforest.owo.ui.core.*
@@ -29,6 +30,9 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
     private var browserWidth = BrowserManager.MAX_BROWSER_WIDTH
     private var browserHeight = BrowserManager.MAX_BROWSER_HEIGHT
 
+    /** True when a mouse press was swallowed due to an open dropdown; paired release is also suppressed. */
+    private var suppressBrowserMouseButton = false
+
     override fun createAdapter(): OwoUIAdapter<FlowLayout> {
         return OwoUIAdapter.create(this, UIContainers::verticalFlow)
     }
@@ -51,7 +55,7 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
         browser = BrowserManager.getOrCreateBrowser(browserWidth, browserHeight)
         browser?.resize(browserWidth, browserHeight)
 
-        logger.info("BrowserScreen init: browserRes=${browserWidth}x${browserHeight}, guiSize=${width}x${height}, window=${mc.window.width}x${mc.window.height}, browser=${browser != null}")
+        CrowmapClient.debug("BrowserScreen init: browserRes=${browserWidth}x${browserHeight}, guiSize=${width}x${height}, window=${mc.window.width}x${mc.window.height}, browser=${browser != null}")
     }
 
     override fun resize(width: Int, height: Int) {
@@ -139,6 +143,9 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
     private fun scaleX(guiX: Double): Int = (guiX * browserWidth / width).toInt()
     private fun scaleY(guiY: Double): Int = (guiY * browserHeight / height).toInt()
 
+    private fun hasOpenDropdown(): Boolean =
+        uiAdapter.rootComponent.children().any { it is DropdownComponent }
+
     override fun mouseClicked(event: MouseButtonEvent, isDoubleClick: Boolean): Boolean {
         // Right-click (button 1) → open the CrowMap context popup
         if (event.button() == GLFW.GLFW_MOUSE_BUTTON_RIGHT) {
@@ -152,16 +159,27 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
             )
             return true
         }
-        // Let owo-ui handle the click first (e.g. an open dropdown button).
-        // Only forward to the browser if nothing in the UI tree consumed it.
+        // If a dropdown is open, let owo-ui consume the click (dismiss/interact with it)
+        // and suppress forwarding to the browser — the user is interacting with UI, not the map.
+        if (hasOpenDropdown()) {
+            suppressBrowserMouseButton = true
+            super.mouseClicked(event, isDoubleClick)
+            return true
+        }
+        suppressBrowserMouseButton = false
         browser?.sendMousePress(scaleX(event.x()), scaleY(event.y()), event.button())
-        if (super.mouseClicked(event, isDoubleClick)) return true
+        super.mouseClicked(event, isDoubleClick)
         return true
     }
 
     override fun mouseReleased(event: MouseButtonEvent): Boolean {
+        if (suppressBrowserMouseButton) {
+            suppressBrowserMouseButton = false
+            super.mouseReleased(event)
+            return true
+        }
         browser?.sendMouseRelease(scaleX(event.x()), scaleY(event.y()), event.button())
-        if (super.mouseReleased(event)) return true
+        super.mouseReleased(event)
         return true
     }
 

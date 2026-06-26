@@ -62,7 +62,7 @@ class Keybindings {
             KeyMapping(
                 "key.crowmap.show_overlay",
                 InputConstants.Type.KEYSYM,
-                GLFW.GLFW_KEY_M,
+                GLFW.GLFW_KEY_Z,
                 CATEGORY
             )
         )

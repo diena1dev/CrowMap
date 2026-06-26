@@ -31,7 +31,7 @@ object MCEFBackend {
         // Clean up old cache directories
         cleanup()
 
-        logger.info("[MCEFBackend] Starting init. isInitialized=${MCEF.INSTANCE.isInitialized}")
+        CrowmapClient.debug("[MCEFBackend] Starting init. isInitialized=${MCEF.INSTANCE.isInitialized}")
 
         if (!MCEF.INSTANCE.isInitialized) {
             MCEF.INSTANCE.settings.apply {
@@ -43,10 +43,10 @@ object MCEFBackend {
                 librariesDirectory = librariesFolder
             }
 
-            logger.info("[MCEFBackend] Settings configured. librariesDir=$librariesFolder")
+            CrowmapClient.debug("[MCEFBackend] Settings configured. librariesDir=$librariesFolder")
 
             val resourceManager = MCEF.INSTANCE.newResourceManager()
-            logger.info("[MCEFBackend] ResourceManager created. compatible=${resourceManager.isSystemCompatible}, requiresDownload=${resourceManager.requiresDownload()}")
+            CrowmapClient.debug("[MCEFBackend] ResourceManager created. compatible=${resourceManager.isSystemCompatible}, requiresDownload=${resourceManager.requiresDownload()}")
 
             // Check if system is compatible with MCEF (JCEF)
             if (!resourceManager.isSystemCompatible) {
@@ -62,10 +62,10 @@ object MCEFBackend {
                 logger.info("[MCEFBackend] JCEF download complete")
             }
 
-            logger.info("[MCEFBackend] Calling MCEF.INSTANCE.initialize()...")
+            CrowmapClient.debug("[MCEFBackend] Calling MCEF.INSTANCE.initialize()...")
             val initResult = MCEF.INSTANCE.initialize()
-            logger.info("[MCEFBackend] MCEF.initialize() returned: $initResult")
-            logger.info("[MCEFBackend] Post-init state: isInitialized=${MCEF.INSTANCE.isInitialized}")
+            CrowmapClient.debug("[MCEFBackend] MCEF.initialize() returned: $initResult")
+            CrowmapClient.debug("[MCEFBackend] Post-init state: isInitialized=${MCEF.INSTANCE.isInitialized}")
 
             // Validate initialization actually succeeded
             if (!MCEF.INSTANCE.isInitialized) {
@@ -75,14 +75,14 @@ object MCEFBackend {
             // Log CefApp state
             try {
                 val cefAppState = CefApp.getState()
-                logger.info("[MCEFBackend] CefApp.getState()=$cefAppState")
+                CrowmapClient.debug("[MCEFBackend] CefApp.getState()=$cefAppState")
             } catch (e: Exception) {
                 logger.warn("[MCEFBackend] Could not get CefApp state: ${e.message}")
             }
 
             logger.info("[MCEFBackend] MCEF initialized successfully")
         } else {
-            logger.info("[MCEFBackend] MCEF was already initialized, skipping init block")
+            CrowmapClient.debug("[MCEFBackend] MCEF was already initialized, skipping init block")
         }
     }
 
@@ -115,7 +115,7 @@ object MCEFBackend {
                 logger.error("Failed to clean up old JCEF cache directories", it)
             }.onSuccess { size ->
                 if (size > 0) {
-                    logger.info("Cleaned up ${size} JCEF cache directories")
+                    CrowmapClient.debug("Cleaned up ${size} JCEF cache directories")
                 }
             }
         }
@@ -136,7 +136,7 @@ object MCEFBackend {
         url: String,
         settings: MCEFBrowserSettings,
     ): MCEFBrowser {
-        logger.info("[MCEFBackend] createBrowser called. url=$url, isInitialized=${MCEF.INSTANCE.isInitialized}")
+        CrowmapClient.debug("[MCEFBackend] createBrowser called. url=$url, isInitialized=${MCEF.INSTANCE.isInitialized}")
 
         // Capture stderr to detect UnsatisfiedLinkError from N_CreateBrowser
         val oldStderr = System.err
@@ -156,12 +156,12 @@ object MCEFBackend {
             System.setErr(teeStream)
 
             val browser = MCEF.INSTANCE.createBrowser(url, true, settings)
-            logger.info("[MCEFBackend] MCEF.createBrowser returned: $browser")
+            CrowmapClient.debug("[MCEFBackend] MCEF.createBrowser returned: $browser")
 
             // Check native handle — on macOS, N_CreateBrowser is asynchronous.
             // Pump the native message loop to process the pending creation.
             var nativeRef = browser.getNativeRef("CefBrowser")
-            logger.info("[MCEFBackend] After createBrowser: nativeRef=$nativeRef (before pump)")
+            CrowmapClient.debug("[MCEFBackend] After createBrowser: nativeRef=$nativeRef (before pump)")
 
             if (nativeRef == 0L) {
                 // Pump native CEF message loop to process async browser creation
@@ -176,7 +176,7 @@ object MCEFBackend {
                 }
 
                 nativeRef = browser.getNativeRef("CefBrowser")
-                logger.info("[MCEFBackend] After pumping message loop: nativeRef=$nativeRef")
+                CrowmapClient.debug("[MCEFBackend] After pumping message loop: nativeRef=$nativeRef")
             }
 
             if (nativeRef == 0L) {
@@ -189,14 +189,14 @@ object MCEFBackend {
                 }
 
                 // Try diagnostic: create browser through CefClient directly
-                logger.info("[MCEFBackend] Attempting diagnostic: CefClient.createBrowser(\"about:blank\", true)...")
+                CrowmapClient.debug("[MCEFBackend] Attempting diagnostic: CefClient.createBrowser(\"about:blank\", true)...")
                 try {
                     val cefClient = MCEF.INSTANCE.client.handle
                     val testBrowser = cefClient.createBrowser("about:blank", true)
                     val testRef = (testBrowser as? org.cef.callback.CefNativeAdapter)?.getNativeRef("CefBrowser") ?: -99L
-                    logger.info("[MCEFBackend] CefClient.createBrowser diagnostic: class=${testBrowser.javaClass.name}, nativeRef=$testRef")
+                    CrowmapClient.debug("[MCEFBackend] CefClient.createBrowser diagnostic: class=${testBrowser.javaClass.name}, nativeRef=$testRef")
                     if (testRef != 0L && testRef != -99L) {
-                        logger.info("[MCEFBackend] Standard CefClient.createBrowser WORKS! Issue is with MCEFBrowser construction.")
+                        CrowmapClient.debug("[MCEFBackend] Standard CefClient.createBrowser WORKS! Issue is with MCEFBrowser construction.")
                     }
                     testBrowser.close(true)
                 } catch (e: Exception) {
@@ -204,11 +204,11 @@ object MCEFBackend {
                 }
 
                 // Try calling createImmediately again
-                logger.info("[MCEFBackend] Attempting retry: browser.createImmediately()...")
+                CrowmapClient.debug("[MCEFBackend] Attempting retry: browser.createImmediately()...")
                 try {
                     browser.createImmediately()
                     val retryRef = browser.getNativeRef("CefBrowser")
-                    logger.info("[MCEFBackend] After retry createImmediately: nativeRef=$retryRef")
+                    CrowmapClient.debug("[MCEFBackend] After retry createImmediately: nativeRef=$retryRef")
                 } catch (e: Exception) {
                     logger.error("[MCEFBackend] Retry createImmediately failed: ${e.javaClass.name}: ${e.message}")
                 }

@@ -141,7 +141,7 @@ object SignAnchorTracker {
             WorldProjectionScreen.updateQuad()
         }
 
-        logger.info("[CrowMap] Applied offset with deltaAngle=${deltaAngleDeg}° → pos=$newPos, yaw=$rotatedYaw")
+        CrowmapClient.debug("[CrowMap] Applied offset with deltaAngle=${deltaAngleDeg}° → pos=$newPos, yaw=$rotatedYaw")
     }
 
     /**
@@ -232,7 +232,7 @@ object SignAnchorTracker {
 
         CrowmapConfig.save()
 
-        logger.info("[CrowMap] Stored anchor offset: $offset (yaw=${player.yRot}, signFacing=${signFacingAngle}°) from sign at $signPos")
+        CrowmapClient.debug("[CrowMap] Stored anchor offset: $offset (yaw=${player.yRot}, signFacing=${signFacingAngle}°) from sign at $signPos")
     }
 }
 
