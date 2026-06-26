@@ -6,7 +6,7 @@
   "description": "A Dynmap Utility Mod for Minecraft 1.21.11.",
   "authors": [],
   "contact": {},
-  "license": "All-Rights-Reserved",
+  "license": "The Unlicense",
   "icon": "assets/crowmap/crowmap.png",
   "environment": "client",
   "entrypoints": {
