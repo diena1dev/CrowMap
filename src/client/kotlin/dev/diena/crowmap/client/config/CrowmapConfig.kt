@@ -116,6 +116,16 @@ object CrowmapConfig {
         get() = W.anchorReferenceAngle()
         set(value) = W.anchorReferenceAngle(value)
 
+    // ── Overlay ──────────────────────────────────────────────────────────
+
+    var overlayMode: CrowmapConfigModel.OverlayMode
+        get() = W.overlayMode()
+        set(value) = W.overlayMode(value)
+
+    var overlayScale: Double
+        get() = W.overlayScale()
+        set(value) = W.overlayScale(value)
+
     // Re-export the enum so existing `CrowmapConfig.HudCorner` references compile.
     typealias HudCorner = CrowmapConfigModel.HudCorner
 }

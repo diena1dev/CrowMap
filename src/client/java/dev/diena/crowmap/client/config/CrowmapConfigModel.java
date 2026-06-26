@@ -59,6 +59,14 @@ public class CrowmapConfigModel {
      *  Used to rotate the offset when the anchor sign faces a different direction. */
     public float anchorReferenceAngle = 0f;
 
+    // ── Overlay ──────────────────────────────────────────────────────────
+
+    @SectionHeader("Overlay")
+    public OverlayMode overlayMode = OverlayMode.HOLD;
+
+    @RangeConstraint(min = 0.1, max = 4.0, decimalPlaces = 1)
+    public double overlayScale = 1.0;
+
     // ── Enums ────────────────────────────────────────────────────────────
 
     public enum HudCorner {
@@ -66,6 +74,11 @@ public class CrowmapConfigModel {
         TOP_RIGHT,
         BOTTOM_LEFT,
         BOTTOM_RIGHT
+    }
+
+    public enum OverlayMode {
+        HOLD,
+        TOGGLE
     }
 }
 

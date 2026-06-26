@@ -3,6 +3,7 @@ package dev.diena.crowmap.client
 import dev.diena.crowmap.client.config.CrowmapConfig
 import dev.diena.crowmap.client.features.browser.BrowserManager
 import dev.diena.crowmap.client.features.hud.MapHudOverlay
+import dev.diena.crowmap.client.features.hud.OverlayHud
 import dev.diena.crowmap.client.features.world.SignAnchorTracker
 import net.fabricmc.api.ClientModInitializer
 import dev.diena.crowmap.client.config.Keybindings
@@ -80,6 +81,7 @@ class CrowmapClient : ClientModInitializer {
 
         // Register the HUD minimap overlay
         MapHudOverlay.register()
+        OverlayHud.register()
 
         // Register the sign-anchor tracker for projection repositioning
         SignAnchorTracker.register()

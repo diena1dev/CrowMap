@@ -2,6 +2,7 @@ package dev.diena.crowmap.client.config
 
 import com.mojang.blaze3d.platform.InputConstants
 import dev.diena.crowmap.client.CrowmapClient
+import dev.diena.crowmap.client.features.hud.OverlayHud
 import dev.diena.crowmap.client.features.world.SignAnchorTracker
 import dev.diena.crowmap.client.features.world.WorldProjectionScreen
 import dev.diena.crowmap.client.screen.BrowserScreen
@@ -12,12 +13,18 @@ import net.minecraft.resources.Identifier
 import org.lwjgl.glfw.GLFW
 
 class Keybindings {
+
+    companion object {
+        /** Exposed so OverlayHud can check isDown for HOLD mode. */
+        var showOverlay: KeyMapping? = null
+    }
+
     private val CATEGORY = KeyMapping.Category(Identifier.fromNamespaceAndPath(CrowmapClient.namespace, "keybindings"))
 
     fun init() {
         val openMap = KeyBindingHelper.registerKeyBinding(
             KeyMapping(
-                "Open Map",
+                "key.crowmap.open_map",
                 InputConstants.Type.KEYSYM,
                 GLFW.GLFW_KEY_X,
                 CATEGORY
@@ -26,7 +33,7 @@ class Keybindings {
 
         val placeProjection = KeyBindingHelper.registerKeyBinding(
             KeyMapping(
-                "Place World Map",
+                "key.crowmap.place_projection",
                 InputConstants.Type.KEYSYM,
                 GLFW.GLFW_KEY_GRAVE_ACCENT,
                 CATEGORY
@@ -35,7 +42,7 @@ class Keybindings {
 
         val toggleProjection = KeyBindingHelper.registerKeyBinding(
             KeyMapping(
-                "Toggle World Map",
+                "key.crowmap.toggle_projection",
                 InputConstants.Type.KEYSYM,
                 GLFW.GLFW_KEY_LEFT_BRACKET,
                 CATEGORY
@@ -44,12 +51,22 @@ class Keybindings {
 
         val toggleHud = KeyBindingHelper.registerKeyBinding(
             KeyMapping(
-                "Toggle HUD Map",
+                "key.crowmap.toggle_hud",
                 InputConstants.Type.KEYSYM,
                 GLFW.GLFW_KEY_RIGHT_BRACKET,
                 CATEGORY
             )
         )
+
+        val overlayKey = KeyBindingHelper.registerKeyBinding(
+            KeyMapping(
+                "key.crowmap.show_overlay",
+                InputConstants.Type.KEYSYM,
+                GLFW.GLFW_KEY_M,
+                CATEGORY
+            )
+        )
+        showOverlay = overlayKey
 
         ClientTickEvents.END_CLIENT_TICK.register { _ ->
             while (openMap.consumeClick()) {
@@ -73,6 +90,13 @@ class Keybindings {
             while (toggleHud.consumeClick()) {
                 CrowmapConfig.hudEnabled = !CrowmapConfig.hudEnabled
                 CrowmapConfig.save()
+            }
+
+            // Drain click queue in all modes; only act in TOGGLE mode.
+            var overlayClicked = false
+            while (overlayKey.consumeClick()) overlayClicked = true
+            if (overlayClicked && CrowmapConfig.overlayMode == CrowmapConfigModel.OverlayMode.TOGGLE) {
+                OverlayHud.visible = !OverlayHud.visible
             }
         }
     }
