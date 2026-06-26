@@ -74,6 +74,11 @@ object ContextPopup {
         else
             "Jump (no coords)"
 
+        val fleetJumpLabel = if (coordX != null && coordZ != null)
+            "Fleet Jump $coordX $coordZ"
+        else
+            "Fleet Jump (no coords)"
+
         DropdownComponent.openContextMenu(
             screen,
             root,
@@ -91,6 +96,13 @@ object ContextPopup {
                     onClose?.invoke()
                     if (coordX != null && coordZ != null) {
                         executeJump(coordX, coordZ)
+                    }
+                }
+                .button(Component.literal(fleetJumpLabel)) { dd ->
+                    dd.remove()
+                    onClose?.invoke()
+                    if (coordX != null && coordZ != null) {
+                        executeFleetJump(coordX, coordZ)
                     }
                 }
         }
@@ -188,6 +200,15 @@ object ContextPopup {
         // Send a teleport command
         player.connection.sendCommand("jump $x $z")
         logger.info("[ContextPopup] Jump to $x $z")
+    }
+
+    internal fun executeFleetJump(x: Int, z: Int) {
+        val player = mc.player ?: return
+        // Close any open screen first
+        mc.setScreen(null)
+        // Send a teleport command
+        player.connection.sendCommand("fleet jump $x $z")
+        logger.info("[ContextPopup] Fleet Jump to $x $z")
     }
 }
 
