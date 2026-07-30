@@ -3,6 +3,10 @@ package dev.diena.crowmap.client.features.world
 import dev.diena.crowmap.client.CrowmapClient
 import dev.diena.crowmap.client.config.CrowmapConfig
 import dev.diena.crowmap.client.features.browser.BrowserManager
+import io.github.trethore.graphene.api.browser.input.BrowserPointerAction
+import io.github.trethore.graphene.api.browser.input.BrowserPointerButton
+import io.github.trethore.graphene.api.browser.input.BrowserPointerInput
+import io.github.trethore.graphene.api.browser.input.BrowserScrollInput
 import io.wispforest.owo.braid.core.BraidGraphics
 import io.wispforest.owo.braid.core.Constraints
 import io.wispforest.owo.braid.core.KeyModifiers
@@ -126,10 +130,10 @@ class BrowserProjectionWidget : LeafInstanceWidget() {
 }
 
 /**
- * Renders the browser texture and forwards input to MCEF.
+ * Renders the browser surface and forwards input to Graphene.
  *
  * Braid button mapping (owo-lib MinecraftMixin):
- *   MC right-click (use)   → braid button 1 → MCEF left-click  (0)
+ *   MC right-click (use)   → braid button 1 → Graphene left-click (0)
  *   MC left-click (attack) → braid button 0 → ignored (would break blocks; braid captures it)
  *
  * Scroll and drag are forwarded directly.
@@ -146,50 +150,71 @@ class BrowserProjectionInstance(widget: BrowserProjectionWidget) :
     override fun measureBaselineOffset(): OptionalDouble? = OptionalDouble.of(1.0)
 
     override fun draw(graphics: BraidGraphics) {
-        val browser = BrowserManager.browser ?: return
-        if (!browser.isTextureReady) return
-        val textureId = browser.textureLocation ?: return
-        val renderer = browser.renderer
-        val texW = renderer.textureWidth
-        val texH = renderer.textureHeight
-        if (texW <= 0 || texH <= 0) return
-        val width  = transform.width().toInt()
+        val surface = BrowserManager.surface ?: return
+        if (surface.browser().latestFrame().isEmpty) return
+        val width = transform.width().toInt()
         val height = transform.height().toInt()
         if (width <= 0 || height <= 0) return
         try {
-            graphics.blit(
-                net.minecraft.client.renderer.RenderPipelines.GUI_TEXTURED,
-                textureId,
-                0, 0, 0f, 0f,
-                width, height, texW, texH, texW, texH
-            )
+            // BraidGraphics is a GuiGraphics (via OwoUIGraphics), so the surface's normal
+            // GuiGraphics render path works directly for this in-world quad too.
+            surface.render(graphics, 0, 0, width, height)
         } catch (_: Exception) { }
     }
 
-    // Braid 1 (MC use/right-click) → MCEF left-click (0)
+    private fun pointer(x: Double, y: Double, action: BrowserPointerAction, clickCount: Int = 0) {
+        val surface = BrowserManager.surface ?: return
+        val width = transform.width().toInt()
+        val height = transform.height().toInt()
+        if (width <= 0 || height <= 0) return
+        surface.browser().sendPointerInput(
+            BrowserPointerInput(
+                action,
+                surface.toBrowserX(x, width),
+                surface.toBrowserY(y, height),
+                BrowserPointerButton.LEFT,
+                clickCount,
+                emptySet()
+            )
+        )
+    }
+
+    // Braid 1 (MC use/right-click) → Graphene left-click
     // Braid 0 (MC attack/left-click) → ignored
     override fun onMouseDown(x: Double, y: Double, button: Int, modifiers: KeyModifiers): Boolean {
         if (button != 1) return true
-        BrowserManager.browser?.sendMousePress(x.toInt(), y.toInt(), 0)
+        pointer(x, y, BrowserPointerAction.PRESS, 1)
         return true
     }
 
     override fun onMouseUp(x: Double, y: Double, button: Int, modifiers: KeyModifiers): Boolean {
         if (button != 1) return true
-        BrowserManager.browser?.sendMouseRelease(x.toInt(), y.toInt(), 0)
+        pointer(x, y, BrowserPointerAction.RELEASE)
         return true
     }
 
     override fun onMouseMove(x: Double, y: Double) {
-        BrowserManager.browser?.sendMouseMove(x.toInt(), y.toInt())
+        pointer(x, y, BrowserPointerAction.MOVE)
     }
 
     override fun onMouseScroll(mouseX: Double, mouseY: Double, xOffset: Double, yOffset: Double): Boolean {
-        BrowserManager.browser?.sendMouseWheel(mouseX.toInt(), mouseY.toInt(), yOffset)
+        val surface = BrowserManager.surface ?: return true
+        val width = transform.width().toInt()
+        val height = transform.height().toInt()
+        if (width <= 0 || height <= 0) return true
+        surface.browser().sendScrollInput(
+            BrowserScrollInput(
+                surface.toBrowserX(mouseX, width),
+                surface.toBrowserY(mouseY, height),
+                Math.round(xOffset * 120).toInt(),
+                Math.round(yOffset * 120).toInt(),
+                emptySet()
+            )
+        )
         return true
     }
 
     override fun onMouseDrag(x: Double, y: Double, deltaX: Double, deltaY: Double) {
-        BrowserManager.browser?.sendMouseMove(x.toInt(), y.toInt())
+        pointer(x, y, BrowserPointerAction.DRAG)
     }
 }

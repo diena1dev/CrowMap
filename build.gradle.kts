@@ -3,7 +3,7 @@ import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 plugins {
     kotlin("jvm") version "2.3.0"
-    id("fabric-loom") version "1.16-SNAPSHOT"
+    id("fabric-loom") version "1.17.17"
     kotlin("kapt") version "2.3.0"
     id("maven-publish")
 }
@@ -48,9 +48,41 @@ repositories {
     // See https://docs.gradle.org/current/userguide/declaring_repositories.html
     // for more information about repositories.
 
+    mavenCentral()
     maven("https://maven.parchmentmc.org")
     maven("https://jitpack.io")
     maven("https://maven.wispforest.io")
+}
+
+// Graphene 2.1.0 ships its loader-independent API/runtime code (the
+// io.github.trethore.graphene.api.*/.internal.* package everything in this
+// project is written against, plus its bundled JCEF bindings) as TWO nested
+// jars-in-a-jar inside graphene-ui-1.21.11 (META-INF/jars/common-*.jar and
+// META-INF/jars/jcefgithub-*.jar), per Fabric Loader's nested-jar convention.
+// Loom's compile-time dependency resolution doesn't expose nested jars at all
+// (breaks compilation), AND Loom's dev-run remap step silently drops them
+// from the remapped mod jar it hands to Fabric Loader for `runClient`
+// (verified: the remapped jar only contains the ~35 fabric-integration
+// classes, none of the nested jars') — causing NoClassDefFoundError at
+// runtime (first for io.github.trethore.graphene.internal.runtime.*, then
+// for io.github.trethore.jcefgithub.* once the first was fixed) even though
+// compilation succeeds. So we extract both nested jars ourselves and put them
+// on the runtime classpath directly.
+val grapheneVersion = "2.1.0"
+
+val grapheneUiJar: Configuration by configurations.creating
+
+val extractGrapheneNestedJars by tasks.registering(Copy::class) {
+    from(zipTree(grapheneUiJar.singleFile)) {
+        include("META-INF/jars/*.jar")
+        eachFile { relativePath = RelativePath(true, name) }
+        includeEmptyDirs = false
+    }
+    into(layout.buildDirectory.dir("graphene-extracted"))
+}
+
+val grapheneExtractedJars = fileTree(layout.buildDirectory.dir("graphene-extracted")) {
+    include("*.jar")
 }
 
 dependencies {
@@ -65,7 +97,14 @@ dependencies {
     modImplementation("net.fabricmc:fabric-language-kotlin:${project.property("kotlin_loader_version")}")
 
     modImplementation("net.fabricmc.fabric-api:fabric-api:${project.property("fabric_version")}")
-    modImplementation("com.github.CCBlueX:mcef:3.1.6-1.21.11")
+    modImplementation("io.github.trethore:graphene-ui-1.21.11:$grapheneVersion")
+    grapheneUiJar("io.github.trethore:graphene-ui-1.21.11:$grapheneVersion") { isTransitive = false }
+    // implementation (not compileOnly) so this also lands on the runtime classpath —
+    // Loom's include() rejects a bare file collection ("not a module component"), so this
+    // can't be jar-in-jar'd into CrowMap's own distributed jar; it's compile+runClient only.
+    // If a shipped build hits the same NoClassDefFoundError, this jar needs bundling some
+    // other way (e.g. shading it into the built jar's classes directly).
+    implementation(files(grapheneExtractedJars).builtBy(extractGrapheneNestedJars))
     modImplementation("io.wispforest:owo-lib:0.13.0-alpha.16+1.21.11")
     // owo-lib annotation processor – generates CrowmapConfigWrapper from CrowmapConfigModel.
     // Uses kapt so the generated wrapper is visible during Kotlin compilation.
@@ -78,7 +117,6 @@ dependencies {
 
     include("com.squareup.okio:okio:3.17.0")
     include("com.squareup.okhttp3:okhttp:5.3.2")
-    include("com.github.CCBlueX:mcef:3.1.6-1.21.11")
     include("io.wispforest:owo-lib:0.13.0-alpha.16+1.21.11")
 }
 

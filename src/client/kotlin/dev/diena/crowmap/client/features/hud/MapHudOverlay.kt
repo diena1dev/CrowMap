@@ -8,11 +8,10 @@ import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElement
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry
 import net.minecraft.client.DeltaTracker
 import net.minecraft.client.gui.GuiGraphics
-import net.minecraft.client.renderer.RenderPipelines
 import net.minecraft.resources.Identifier
 
 /**
- * HUD overlay that renders a center-cropped square portion of the MCEF browser texture
+ * HUD overlay that renders a center-cropped square portion of the Graphene browser surface
  * in a configurable corner of the screen.
  */
 object MapHudOverlay : HudElement {
@@ -32,14 +31,11 @@ object MapHudOverlay : HudElement {
     override fun render(context: GuiGraphics, tickCounter: DeltaTracker) {
         if (!CrowmapConfig.hudEnabled) return
 
-        val browser = BrowserManager.browser ?: return
-        if (!browser.isTextureReady) return
+        val surface = BrowserManager.surface ?: return
+        if (surface.browser().latestFrame().isEmpty) return
 
-        val textureId = browser.textureLocation ?: return
-
-        val renderer = browser.renderer
-        val texWidth = renderer.textureWidth
-        val texHeight = renderer.textureHeight
+        val texWidth = surface.resolutionWidth()
+        val texHeight = surface.resolutionHeight()
         if (texWidth <= 0 || texHeight <= 0) return
 
         val screenWidth = mc.window.guiScaledWidth
@@ -56,7 +52,7 @@ object MapHudOverlay : HudElement {
             HudCorner.BOTTOM_RIGHT -> Pair(screenWidth - size - margin, screenHeight - size - margin)
         }
 
-        // Calculate center crop: take a square from the center of the browser texture
+        // Calculate center crop: take a square from the center of the browser content
         val cropSize = minOf(texWidth, texHeight)
         val cropX = (texWidth - cropSize) / 2
         val cropY = (texHeight - cropSize) / 2
@@ -68,26 +64,16 @@ object MapHudOverlay : HudElement {
             0xFF222222.toInt()
         )
 
-        // Render the center-cropped portion of the browser texture
-        try {
-            // blit(pipeline, atlas, x, y, u, v, width, height, uWidth, vHeight, texWidth, texHeight)
-            //   x,y           = destination position on screen
-            //   u,v           = source UV offset in texture pixels
-            //   width,height  = destination size on screen (the HUD square)
-            //   uWidth,vHeight= source region size in texture pixels (the crop)
-            //   texWidth,texHeight = total texture dimensions for UV normalisation
-            context.blit(
-                RenderPipelines.GUI_TEXTURED,
-                textureId,
-                screenX, screenY,                      // destination x, y
-                cropX.toFloat(), cropY.toFloat(),      // source u, v offset
-                size, size,                            // destination width, height
-                cropSize, cropSize,                    // source region (full center square)
-                texWidth, texHeight                    // total texture dimensions
-            )
-        } catch (_: IllegalStateException) {
-            // Texture view may not be fully initialized yet — ignore this frame
-        }
+        // Render the full surface scaled so the desired crop lands exactly in the HUD square,
+        // then scissor to that square so only the cropped region is visible.
+        val scale = size.toDouble() / cropSize
+        val renderedWidth = (texWidth * scale).toInt().coerceAtLeast(1)
+        val renderedHeight = (texHeight * scale).toInt().coerceAtLeast(1)
+        val originX = (screenX - cropX * scale).toInt()
+        val originY = (screenY - cropY * scale).toInt()
+
+        context.enableScissor(screenX, screenY, screenX + size, screenY + size)
+        surface.render(context, originX, originY, renderedWidth, renderedHeight)
+        context.disableScissor()
     }
 }
-

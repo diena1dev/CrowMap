@@ -1,30 +1,32 @@
 package dev.diena.crowmap.client.screen
 
+import com.mojang.blaze3d.platform.cursor.CursorType
+import com.mojang.blaze3d.platform.cursor.CursorTypes
 import dev.diena.crowmap.client.CrowmapClient
 import dev.diena.crowmap.client.features.browser.BrowserManager
+import io.github.trethore.graphene.api.browser.BrowserCursor
+import io.github.trethore.graphene.fabric.api.surface.BrowserSurface
 import io.wispforest.owo.ui.base.BaseOwoScreen
 import io.wispforest.owo.ui.component.DropdownComponent
 import io.wispforest.owo.ui.container.FlowLayout
 import io.wispforest.owo.ui.container.UIContainers
 import io.wispforest.owo.ui.core.*
-import net.ccbluex.liquidbounce.mcef.cef.MCEFBrowser
 import net.minecraft.client.gui.GuiGraphics
 import net.minecraft.client.input.CharacterEvent
 import net.minecraft.client.input.KeyEvent
 import net.minecraft.client.input.MouseButtonEvent
-import net.minecraft.client.renderer.RenderPipelines
 import net.minecraft.network.chat.Component
 import org.lwjgl.glfw.GLFW
 
 /**
- * Full-screen browser screen using owo-ui for layout, with MCEF browser rendering
+ * Full-screen browser screen using owo-ui for layout, with Graphene browser rendering
  * and full mouse/keyboard forwarding.
  */
 class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Browser")) {
 
     private val mc = CrowmapClient.mc
     private val logger = CrowmapClient.logger
-    private var browser: MCEFBrowser? = null
+    private var surface: BrowserSurface? = null
 
     /** The browser resolution currently in use (capped at 1080p, aspect-correct). */
     private var browserWidth = BrowserManager.MAX_BROWSER_WIDTH
@@ -52,10 +54,10 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
         browserWidth = bw
         browserHeight = bh
 
-        browser = BrowserManager.getOrCreateBrowser(browserWidth, browserHeight)
-        browser?.resize(browserWidth, browserHeight)
+        surface = BrowserManager.getOrCreateBrowser(browserWidth, browserHeight)
+        BrowserManager.inputAdapter?.setFocused(true)
 
-        CrowmapClient.debug("BrowserScreen init: browserRes=${browserWidth}x${browserHeight}, guiSize=${width}x${height}, window=${mc.window.width}x${mc.window.height}, browser=${browser != null}")
+        CrowmapClient.debug("BrowserScreen init: browserRes=${browserWidth}x${browserHeight}, guiSize=${width}x${height}, window=${mc.window.width}x${mc.window.height}, surface=${surface != null}")
     }
 
     override fun resize(width: Int, height: Int) {
@@ -64,47 +66,17 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
         val (bw, bh) = BrowserManager.computeBrowserSize()
         browserWidth = bw
         browserHeight = bh
-        browser?.resize(browserWidth, browserHeight)
+        BrowserManager.resize(browserWidth, browserHeight)
     }
 
     override fun render(context: GuiGraphics, mouseX: Int, mouseY: Int, delta: Float) {
-        val b = browser
-        if (b != null && b.isTextureReady) {
-            val textureId = b.textureLocation
-            if (textureId != null) {
-                val renderer = b.renderer
-                val texW = renderer.textureWidth
-                val texH = renderer.textureHeight
-
-                if (texW > 0 && texH > 0) {
-                    try {
-                        // blit(pipeline, atlas, x, y, u, v, width, height, uWidth, vHeight, texWidth, texHeight)
-                        //   x,y            = dest position on screen (GUI-scaled)
-                        //   u,v            = source offset in texture pixels
-                        //   width, height  = dest size (GUI-scaled screen)
-                        //   uWidth,vHeight = source region (full browser texture)
-                        //   texWidth,texHeight = total texture dimensions
-                        context.blit(
-                            RenderPipelines.GUI_TEXTURED,
-                            textureId,
-                            0, 0,                       // screen x, y
-                            0f, 0f,                     // texture u, v offset
-                            width, height,              // destination width, height
-                            texW, texH,                 // source region (full texture)
-                            texW, texH                  // total texture dimensions
-                        )
-                    } catch (_: IllegalStateException) {
-                        // Texture view may not be fully initialized yet — show loading state
-                        renderLoadingScreen(context, "Loading page...")
-                    }
-                } else {
-                    renderLoadingScreen(context, "Loading page...")
-                }
-            } else {
-                renderLoadingScreen(context, "Loading page...")
-            }
+        val s = surface
+        val hasFrame = s?.browser()?.latestFrame()?.isPresent == true
+        if (s != null && hasFrame) {
+            s.render(context, 0, 0, width, height)
+            context.requestCursor(cursor(s))
         } else {
-            renderLoadingScreen(context, if (b == null) "Initializing browser..." else "Loading page...")
+            renderLoadingScreen(context, if (s == null) "Initializing browser..." else "Loading page...")
         }
 
         // Render owo-ui overlay on top
@@ -120,28 +92,22 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
             height / 2 - 10,
             0xFFFFFF
         )
+    }
 
-        // Show diagnostic info
-        val b = browser
-        if (b != null) {
-            val renderer = b.renderer
-            val diagInfo = "tex=${b.isTextureReady} size=${renderer.textureWidth}x${renderer.textureHeight} accel=${renderer.isAccelerated}"
-            context.drawCenteredString(
-                mc.font,
-                diagInfo,
-                width / 2,
-                height / 2 + 5,
-                0x888888
-            )
-        }
+    private fun cursor(s: BrowserSurface): CursorType = when (s.browser().requestedCursor()) {
+        BrowserCursor.CROSSHAIR -> CursorTypes.CROSSHAIR
+        BrowserCursor.TEXT -> CursorTypes.IBEAM
+        BrowserCursor.HAND -> CursorTypes.POINTING_HAND
+        BrowserCursor.NOT_ALLOWED -> CursorTypes.NOT_ALLOWED
+        BrowserCursor.RESIZE_HORIZONTAL -> CursorTypes.RESIZE_EW
+        BrowserCursor.RESIZE_VERTICAL -> CursorTypes.RESIZE_NS
+        BrowserCursor.RESIZE_ALL -> CursorTypes.RESIZE_ALL
+        BrowserCursor.ARROW -> CursorTypes.ARROW
     }
 
     // --- Mouse input forwarding ---
-    // MCEF expects coordinates in the browser's resolution space, so scale from
-    // GUI-scaled coords to the capped browser resolution.
-
-    private fun scaleX(guiX: Double): Int = (guiX * browserWidth / width).toInt()
-    private fun scaleY(guiY: Double): Int = (guiY * browserHeight / height).toInt()
+    // The input adapter maps GUI-scaled coordinates (relative to the full-screen surface,
+    // origin at 0,0) into the browser's fixed pixel resolution internally.
 
     private fun hasOpenDropdown(): Boolean =
         uiAdapter.rootComponent.children().any { it is DropdownComponent }
@@ -152,8 +118,8 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
             ContextPopup.open(
                 screen = this,
                 root = uiAdapter.rootComponent,
-                browserPixelX = scaleX(event.x()),
-                browserPixelY = scaleY(event.y()),
+                browserPixelX = BrowserManager.surface?.toBrowserX(event.x(), width) ?: 0,
+                browserPixelY = BrowserManager.surface?.toBrowserY(event.y(), height) ?: 0,
                 guiX = event.x(),
                 guiY = event.y()
             )
@@ -167,7 +133,10 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
             return true
         }
         suppressBrowserMouseButton = false
-        browser?.sendMousePress(scaleX(event.x()), scaleY(event.y()), event.button())
+        BrowserManager.inputAdapter?.mouseButton(
+            event.x(), event.y(), 0, 0, width, height,
+            event.button(), true, if (isDoubleClick) 2 else 1, event.modifiers()
+        )
         super.mouseClicked(event, isDoubleClick)
         return true
     }
@@ -178,24 +147,29 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
             super.mouseReleased(event)
             return true
         }
-        browser?.sendMouseRelease(scaleX(event.x()), scaleY(event.y()), event.button())
+        BrowserManager.inputAdapter?.mouseButton(
+            event.x(), event.y(), 0, 0, width, height,
+            event.button(), false, 0, event.modifiers()
+        )
         super.mouseReleased(event)
         return true
     }
 
     override fun mouseMoved(mouseX: Double, mouseY: Double) {
-        browser?.sendMouseMove(scaleX(mouseX), scaleY(mouseY))
+        BrowserManager.inputAdapter?.mouseMoved(mouseX, mouseY, 0, 0, width, height, 0)
         super.mouseMoved(mouseX, mouseY)
     }
 
     override fun mouseScrolled(mouseX: Double, mouseY: Double, horizontalAmount: Double, verticalAmount: Double): Boolean {
         if (super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount)) return true
-        browser?.sendMouseWheel(scaleX(mouseX), scaleY(mouseY), verticalAmount)
+        BrowserManager.inputAdapter?.mouseScrolled(
+            mouseX, mouseY, 0, 0, width, height, horizontalAmount, verticalAmount, 0
+        )
         return true
     }
 
     override fun mouseDragged(click: MouseButtonEvent, deltaX: Double, deltaY: Double): Boolean {
-        browser?.sendMouseMove(scaleX(click.x()), scaleY(click.y()))
+        BrowserManager.inputAdapter?.mouseDragged(click.x(), click.y(), 0, 0, width, height, click.modifiers())
         return true
     }
 
@@ -206,17 +180,17 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
             onClose()
             return true
         }
-        browser?.sendKeyPress(input.key(), input.scancode().toLong(), input.modifiers())
+        BrowserManager.inputAdapter?.key(input.key(), input.scancode(), true, input.modifiers())
         return true
     }
 
     override fun keyReleased(event: KeyEvent): Boolean {
-        browser?.sendKeyRelease(event.key(), event.scancode().toLong(), event.modifiers())
+        BrowserManager.inputAdapter?.key(event.key(), event.scancode(), false, event.modifiers())
         return true
     }
 
     override fun charTyped(event: CharacterEvent): Boolean {
-        browser?.sendKeyTyped(event.codepoint().toChar(), event.modifiers())
+        BrowserManager.inputAdapter?.text(event.codepointAsString(), event.modifiers())
         return true
     }
 
@@ -227,8 +201,3 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
         super.onClose()
     }
 }
-
-
-
-
-

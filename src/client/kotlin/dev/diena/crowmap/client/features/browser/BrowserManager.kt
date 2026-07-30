@@ -1,31 +1,36 @@
 package dev.diena.crowmap.client.features.browser
 
-import com.mojang.blaze3d.systems.RenderSystem
 import dev.diena.crowmap.client.CrowmapClient
 import dev.diena.crowmap.client.config.CrowmapConfig
-import net.ccbluex.liquidbounce.mcef.MCEF
-import net.ccbluex.liquidbounce.mcef.cef.MCEFBrowser
-import net.ccbluex.liquidbounce.mcef.cef.MCEFBrowserSettings
+import io.github.trethore.graphene.api.browser.BrowserLoadCompleted
+import io.github.trethore.graphene.api.browser.BrowserLoadFailed
+import io.github.trethore.graphene.api.browser.BrowserLoadListener
+import io.github.trethore.graphene.api.browser.BrowserOptions
+import io.github.trethore.graphene.api.browser.BrowserSession
+import io.github.trethore.graphene.api.browser.bridge.BrowserBridgePolicy
+import io.github.trethore.graphene.fabric.api.surface.BrowserSurface
+import io.github.trethore.graphene.fabric.api.surface.BrowserSurfaceInputAdapter
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents
-import org.cef.CefApp
-import org.cef.browser.CefBrowser
-import org.cef.browser.CefFrame
-import org.cef.handler.CefLoadHandler
-import org.cef.network.CefRequest
-import dev.diena.crowmap.client.features.liveatlas.LocalLiveAtlasServer
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Manages the shared MCEF browser instance used by the screen, HUD, and world projection.
+ * Manages the shared Graphene browser surface used by the screen, HUD, and world projection.
  */
 object BrowserManager {
     private val logger = CrowmapClient.logger
 
-    /** The shared browser instance. */
-    var browser: MCEFBrowser? = null
+    /** The shared browser surface (owns one [BrowserSession]). */
+    var surface: BrowserSurface? = null
         private set
 
-    /** Whether the MCEF backend has been initialized. */
+    /** The underlying browser session, when a surface exists. */
+    val session: BrowserSession? get() = surface?.browser()
+
+    /** The shared input adapter for the surface, used by [dev.diena.crowmap.client.screen.BrowserScreen]. */
+    var inputAdapter: BrowserSurfaceInputAdapter? = null
+        private set
+
+    /** Whether the backend has been initialized. */
     var initialized: Boolean = false
         private set
 
@@ -33,68 +38,27 @@ object BrowserManager {
     const val MAX_BROWSER_WIDTH = 1920
     const val MAX_BROWSER_HEIGHT = 1080
 
-    /** Tick counter for periodic diagnostic logging. */
-    private var tickCount = 0
-    private var hasLoggedTextureReady = false
-
-    /** Last window size used for browser resize — lets us detect changes. */
+    /** Last window size used for browser resolution — lets us detect changes. */
     private var lastWindowWidth = 0
     private var lastWindowHeight = 0
-
-    /** Track if we've seen a paint event from CEF at all. */
-    @Volatile
-    private var paintEventReceived = false
-    private var paintEventThread: String? = null
 
     // ── Custom CSS injection ─────────────────────────────────────────────
 
     /** Registered CSS snippets keyed by a caller-chosen id. Re-injected on every page load. */
     private val customCssMap = ConcurrentHashMap<String, String>()
 
-    /** Whether the load handler for CSS re-injection has been installed. */
-    private var cssLoadHandlerInstalled = false
-
     /**
-     * Initializes the MCEF backend and registers diagnostic tick handler.
+     * Initializes the browser backend and registers the window-resize watcher.
      * Should be called early in the client lifecycle.
      */
     fun init() {
-        try {
-            MCEFBackend.init()
-            initialized = true
-            logger.info("MCEF backend initialized successfully")
-            CrowmapClient.debug("MCEF isInitialized=${MCEF.INSTANCE.isInitialized}, client=${MCEF.INSTANCE.client != null}")
+        initialized = true
+        logger.info("Graphene browser backend initialized")
 
-            // Install the JS→Java message router used by WebDataReader
-            WebDataReader.install()
-
-            // Install load handler for CSS re-injection on every page load
-            installCssLoadHandler()
-        } catch (e: Exception) {
-            logger.error("Failed to initialize MCEF backend", e)
-            return
-        }
-
-        // Periodic diagnostics + CEF message loop pump + forced invalidation
         ClientTickEvents.END_CLIENT_TICK.register { _ ->
-            if (!initialized || !MCEFBackend.isInitialized) return@register
+            if (!initialized) return@register
+            val activeSurface = surface ?: return@register
 
-            // Pump CEF's NATIVE message loop.
-            // On macOS, the Java wrapper doMessageLoopWork(long) is a no-op,
-            // but the native N_DoMessageLoopWork() actually processes pending CEF
-            // IPC events — including asynchronous browser creation from N_CreateBrowser.
-            try {
-                CefApp.getInstance().N_DoMessageLoopWork()
-            } catch (e: Exception) {
-                if (tickCount % 200 == 0) {
-                    CrowmapClient.debug("[CrowMap] N_DoMessageLoopWork failed: ${e.message}")
-                }
-            }
-
-            tickCount++
-            val b = browser ?: return@register
-
-            // Detect window resize and update the browser + projection accordingly
             val mc = CrowmapClient.mc
             val curW = mc.window.width
             val curH = mc.window.height
@@ -102,151 +66,70 @@ object BrowserManager {
                 lastWindowWidth = curW
                 lastWindowHeight = curH
                 val (bw, bh) = computeBrowserSize()
-                b.resize(bw, bh)
-                // Let the world projection know the window changed
+                activeSurface.setResolution(bw, bh)
                 dev.diena.crowmap.client.features.world.WorldProjectionScreen.onWindowResize()
-            }
-
-            // Every 5 seconds, log detailed diagnostic state
-            if (tickCount % 100 == 0 && !hasLoggedTextureReady) {
-                val renderer = b.renderer
-
-                // Check native browser handle and loading state
-                var nativeRef = 0L
-                var browserUrl = "<error>"
-                var loading = false
-                var hasDoc = false
-                var browserId = -1
-                try {
-                    nativeRef = b.getNativeRef("CefBrowser")
-                    browserUrl = b.getURL() ?: "<null>"
-                    loading = b.isLoading
-                    hasDoc = b.hasDocument()
-                    browserId = b.identifier
-                } catch (e: Exception) {
-                    logger.warn("[CrowMap Diag] Error querying browser state: ${e.message}")
-                }
-
-                CrowmapClient.debug(
-                    "[CrowMap Diag] nativeRef=$nativeRef, id=$browserId, url=$browserUrl, " +
-                    "loading=$loading, hasDoc=$hasDoc, " +
-                    "textureReady=${b.isTextureReady}, " +
-                    "texSize=${renderer.textureWidth}x${renderer.textureHeight}, " +
-                    "unpainted=${renderer.isUnpainted}, " +
-                    "accelerated=${renderer.isAccelerated}, " +
-                    "paintReceived=$paintEventReceived, " +
-                    "paintThread=$paintEventThread"
-                )
-
-                // Try to force a repaint by invalidating
-                try {
-                    b.clear() // calls invalidate()
-                } catch (e: Exception) {
-                    CrowmapClient.debug("[CrowMap Diag] invalidate() failed: ${e.message}")
-                }
-            }
-
-            if (b.isTextureReady && !hasLoggedTextureReady) {
-                CrowmapClient.debug("[CrowMap] Browser texture is now READY! Size: ${b.renderer.textureWidth}x${b.renderer.textureHeight}")
-                hasLoggedTextureReady = true
-
-                // Auto-activate the world projection if it was enabled in config
-                // (e.g. from a previous session) but hasn't been activated yet
-                // because the browser wasn't ready at startup.
-                if (CrowmapConfig.projectionEnabled && !dev.diena.crowmap.client.features.world.WorldProjectionScreen.isActive) {
-                    dev.diena.crowmap.client.features.world.WorldProjectionScreen.activate()
-                }
             }
         }
     }
 
     /**
-     * Returns the URL the browser should load — LocalLiveAtlas when enabled and ready,
-     * otherwise the configured Dynmap URL.
+     * Returns the URL the browser should load.
      */
-    fun getTargetUrl(): String =
-        if (CrowmapConfig.useLocalLiveAtlas && LocalLiveAtlasServer.state == LocalLiveAtlasServer.State.READY)
-            LocalLiveAtlasServer.localUrl
-        else
-            CrowmapConfig.mapUrl
+    fun getTargetUrl(): String = CrowmapConfig.mapUrl
 
     /**
-     * Creates or returns the shared browser with the configured URL.
+     * Creates or returns the shared browser surface with the configured URL, at the given
+     * fixed browser resolution.
      */
-    fun getOrCreateBrowser(width: Int = 1920, height: Int = 1080): MCEFBrowser? {
+    fun getOrCreateBrowser(width: Int = MAX_BROWSER_WIDTH, height: Int = MAX_BROWSER_HEIGHT): BrowserSurface? {
         if (!initialized) {
             logger.warn("Cannot create browser - BrowserManager not initialized")
             return null
         }
-        if (!MCEFBackend.isInitialized) {
-            logger.warn("Cannot create browser - MCEF backend not initialized")
-            return null
-        }
-        if (!MCEF.INSTANCE.isInitialized) {
-            logger.warn("Cannot create browser - MCEF.INSTANCE not initialized")
-            return null
-        }
 
-        if (browser == null) {
+        if (surface == null) {
             try {
-                CrowmapClient.debug("[CrowMap] Creating browser on thread=${Thread.currentThread().name}, isRenderThread=${RenderSystem.isOnRenderThread()}")
-
-                val settings = MCEFBrowserSettings(60, false)
                 val targetUrl = getTargetUrl()
-                CrowmapClient.debug("[CrowMap] Creating browser for URL: $targetUrl at size ${width}x${height}")
+                CrowmapClient.debug("[CrowMap] Creating browser surface for URL: $targetUrl at size ${width}x${height}")
 
-                val b = MCEFBackend.createBrowser(targetUrl, settings)
-                CrowmapClient.debug("[CrowMap] Browser object created: $b")
+                val options = BrowserOptions.builder()
+                    // Dynmap is a fixed, user-configured server (not arbitrary remote content),
+                    // so allow the bridge for the origin the browser was created with.
+                    .bridgePolicy(BrowserBridgePolicy.initialOrigin())
+                    .build()
 
-                // Add a paint listener to detect if CEF ever fires paint callbacks.
-                // This fires AFTER MCEFBrowser.onPaint does its GL work (via super.onPaint).
-                b.addOnPaintListener { event ->
-                    if (!paintEventReceived) {
-                        paintEventReceived = true
-                        paintEventThread = Thread.currentThread().name
-                        CrowmapClient.debug("[CrowMap] PAINT EVENT received! thread=${Thread.currentThread().name}, " +
-                            "isRenderThread=${RenderSystem.isOnRenderThread()}, " +
-                            "size=${event.width}x${event.height}, " +
-                            "dirtyRects=${event.dirtyRects.size}")
+                val newSurface = BrowserSurface.builder(CrowmapClient.graphene())
+                    .url(targetUrl)
+                    .size(width, height)
+                    .resolution(width, height)
+                    .options(options)
+                    .build()
+
+                newSurface.browser().onLoad(object : BrowserLoadListener {
+                    override fun onLoadCompleted(event: BrowserLoadCompleted) {
+                        if (event.mainFrame()) {
+                            CrowmapClient.debug("[CrowMap] Page load finished — re-injecting ${customCssMap.size} CSS snippet(s)")
+                            applyAllCss()
+                        }
                     }
-                }
 
-                // Resize the browser to the desired dimensions.
-                // This triggers wasResized() which tells CEF to repaint at the new size.
-                b.resize(width, height)
-                CrowmapClient.debug("[CrowMap] Browser resized to ${width}x${height}")
+                    override fun onLoadFailed(event: BrowserLoadFailed) {
+                        logger.warn("[CrowMap] Page load failed: ${event.url()} (${event.message()})")
+                    }
+                })
 
-                // Log initial renderer state
-                val renderer = b.renderer
-                CrowmapClient.debug("[CrowMap] Renderer state after creation: " +
-                    "texReady=${b.isTextureReady}, " +
-                    "texW=${renderer.textureWidth}, texH=${renderer.textureHeight}, " +
-                    "identifier=${renderer.identifier}")
+                surface = newSurface
+                inputAdapter = BrowserSurfaceInputAdapter(newSurface)
+                WebDataReader.install(newSurface.browser())
 
-                // Check if the native browser was actually created
-                val nativeRef = b.getNativeRef("CefBrowser")
-                val url = b.getURL() ?: "<null>"
-                val loading = b.isLoading
-                CrowmapClient.debug("[CrowMap] Native browser check: nativeRef=$nativeRef, url=$url, loading=$loading, id=${b.identifier}")
-
-                if (nativeRef == 0L) {
-                    logger.error("[CrowMap] CRITICAL: Native browser handle is 0 — browser was NOT created by CEF!")
-                    CrowmapClient.debug("[CrowMap] Attempting explicit loadURL...")
-                    b.loadURL(targetUrl)
-                }
-
-                browser = b
-                hasLoggedTextureReady = false
-                paintEventReceived = false
-                paintEventThread = null
-
+                logger.info("[CrowMap] Browser surface created")
             } catch (e: Exception) {
-                logger.error("[CrowMap] Failed to create browser", e)
+                logger.error("[CrowMap] Failed to create browser surface", e)
                 return null
             }
         }
 
-        return browser
+        return surface
     }
 
     /**
@@ -273,39 +156,37 @@ object BrowserManager {
     }
 
     /**
-     * Resizes the shared browser.
+     * Sets the browser's fixed pixel resolution directly (used by the world-projection texture path).
      */
     fun resize(width: Int, height: Int) {
-        browser?.resize(width, height)
+        surface?.setResolution(width, height)
     }
 
     /**
      * Navigates the shared browser to a new URL.
      */
     fun navigate(url: String) {
-        browser?.loadURL(url)
+        session?.navigate(url)
     }
 
     /**
-     * Closes and cleans up the shared browser.
+     * Closes and cleans up the shared browser surface.
      */
     fun closeBrowser() {
-        browser?.close()
-        browser = null
-        hasLoggedTextureReady = false
+        inputAdapter?.close()
+        inputAdapter = null
+        surface?.close()
+        surface = null
     }
 
     /**
-     * Shuts down the MCEF backend entirely.
+     * Shuts down the browser backend entirely.
      */
     fun shutdown() {
         WebDataReader.shutdown()
         closeBrowser()
         customCssMap.clear()
-        if (initialized) {
-            MCEFBackend.stop()
-            initialized = false
-        }
+        initialized = false
     }
 
     // ── Custom CSS injection API ─────────────────────────────────────────
@@ -342,7 +223,7 @@ object BrowserManager {
                 if(el) el.remove();
             })();
         """.trimIndent()
-        browser?.executeJavaScript(removeJs, browser?.url ?: "", 0)
+        session?.executeScript(removeJs)
         CrowmapClient.debug("[CrowMap] CSS removed (id=$id)")
     }
 
@@ -352,12 +233,12 @@ object BrowserManager {
     fun clearCss() {
         val ids = customCssMap.keys.toList()
         customCssMap.clear()
-        val b = browser ?: return
+        val activeSession = session ?: return
         val removeJs = ids.joinToString("\n") { id ->
             "(function(){ var el = document.getElementById('crowmap-css-$id'); if(el) el.remove(); })();"
         }
         if (removeJs.isNotEmpty()) {
-            b.executeJavaScript(removeJs, b.url ?: "", 0)
+            activeSession.executeScript(removeJs)
         }
         CrowmapClient.debug("[CrowMap] All custom CSS cleared")
     }
@@ -370,49 +251,10 @@ object BrowserManager {
     // ── Internal CSS helpers ─────────────────────────────────────────────
 
     /**
-     * Installs a [CefLoadHandler] on the MCEF client that re-injects all
-     * registered CSS snippets after every page load.
-     */
-    private fun installCssLoadHandler() {
-        if (cssLoadHandlerInstalled) return
-        try {
-            val mcefClient = MCEF.INSTANCE.client
-            mcefClient.addLoadHandler(object : CefLoadHandler {
-                override fun onLoadingStateChange(
-                    browser: CefBrowser?, isLoading: Boolean,
-                    canGoBack: Boolean, canGoForward: Boolean
-                ) { /* no-op */ }
-
-                override fun onLoadStart(
-                    browser: CefBrowser?, frame: CefFrame?,
-                    transitionType: CefRequest.TransitionType?
-                ) { /* no-op */ }
-
-                override fun onLoadEnd(browser: CefBrowser?, frame: CefFrame?, httpStatusCode: Int) {
-                    // Only inject into the main frame
-                    if (frame == null || !frame.isMain) return
-                    if (customCssMap.isEmpty()) return
-                    CrowmapClient.debug("[CrowMap] Page load finished — re-injecting ${customCssMap.size} CSS snippet(s)")
-                    applyAllCss()
-                }
-
-                override fun onLoadError(
-                    browser: CefBrowser?, frame: CefFrame?,
-                    errorCode: CefLoadHandler.ErrorCode?, errorText: String?, failedUrl: String?
-                ) { /* no-op */ }
-            })
-            cssLoadHandlerInstalled = true
-            CrowmapClient.debug("[CrowMap] CSS re-injection load handler installed")
-        } catch (e: Exception) {
-            logger.error("[CrowMap] Failed to install CSS load handler", e)
-        }
-    }
-
-    /**
      * Applies a single CSS snippet to the current page by injecting a `<style>` element.
      */
     private fun applyOneCss(id: String, css: String) {
-        val b = browser ?: return
+        val activeSession = session ?: return
         val escaped = css
             .replace("\\", "\\\\")
             .replace("'", "\\'")
@@ -428,7 +270,7 @@ object BrowserManager {
                 (document.head || document.documentElement).appendChild(style);
             })();
         """.trimIndent()
-        b.executeJavaScript(js, b.url ?: "", 0)
+        activeSession.executeScript(js)
     }
 
     /**
@@ -438,9 +280,3 @@ object BrowserManager {
         customCssMap.forEach { (id, css) -> applyOneCss(id, css) }
     }
 }
-
-
-
-
-
-

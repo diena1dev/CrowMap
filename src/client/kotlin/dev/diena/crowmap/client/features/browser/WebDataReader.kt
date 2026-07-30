@@ -1,12 +1,8 @@
 package dev.diena.crowmap.client.features.browser
 
 import dev.diena.crowmap.client.CrowmapClient
-import net.ccbluex.liquidbounce.mcef.MCEF
-import org.cef.browser.CefBrowser
-import org.cef.browser.CefFrame
-import org.cef.browser.CefMessageRouter
-import org.cef.callback.CefQueryCallback
-import org.cef.handler.CefMessageRouterHandlerAdapter
+import io.github.trethore.graphene.api.GrapheneSubscription
+import io.github.trethore.graphene.api.browser.BrowserSession
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ScheduledExecutorService
@@ -16,8 +12,8 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Reads data from the embedded MCEF browser by executing JavaScript on the page
- * and receiving results via CEF's message-router (cefQuery) bridge.
+ * Reads data from the embedded Graphene browser by executing JavaScript on the page
+ * and receiving results back through Graphene's Java/JavaScript bridge.
  *
  * ## Usage
  *
@@ -47,10 +43,11 @@ object WebDataReader {
 
     private val logger = CrowmapClient.logger
 
-    // ── Message router (JS → Java bridge) ────────────────────────────────
+    /** Bridge channel used for JS -> Java query replies. Must not start with "graphene:". */
+    private const val QUERY_CHANNEL = "crowmap:query"
 
-    /** The CefMessageRouter instance registered on the CefClient. */
-    private var messageRouter: CefMessageRouter? = null
+    /** The active bridge subscription for [QUERY_CHANNEL], if installed. */
+    private var querySubscription: GrapheneSubscription? = null
 
     /** Pending one-shot query futures keyed by a monotonically increasing query id. */
     private val pendingQueries = ConcurrentHashMap<Long, CompletableFuture<String>>()
@@ -72,59 +69,23 @@ object WebDataReader {
     // ── Initialisation ───────────────────────────────────────────────────
 
     /**
-     * Installs the message router on the MCEF CefClient.
-     * Must be called **before** any browser is created (i.e. during [BrowserManager.init]).
+     * Installs the bridge listener that receives query replies from the page.
+     * Must be called once per [BrowserSession] (i.e. during [BrowserManager.getOrCreateBrowser]).
      */
-    fun install() {
-        if (messageRouter != null) return // already installed
-
-        val config = CefMessageRouter.CefMessageRouterConfig(
-            "crowmapQuery",       // JS function name: window.crowmapQuery({request: …})
-            "crowmapQueryCancel"  // JS cancel function
-        )
-
-        val handler = object : CefMessageRouterHandlerAdapter() {
-            override fun onQuery(
-                browser: CefBrowser,
-                frame: CefFrame,
-                queryId: Long,
-                request: String,
-                persistent: Boolean,
-                callback: CefQueryCallback
-            ): Boolean {
-                return handleIncomingQuery(request, callback)
-            }
-
-            override fun onQueryCanceled(
-                browser: CefBrowser,
-                frame: CefFrame,
-                queryId: Long
-            ) {
-                // Not much to do – the future will simply never complete (or timeout)
-            }
+    fun install(session: BrowserSession) {
+        querySubscription?.unsubscribe()
+        querySubscription = session.bridge().onEvent(QUERY_CHANNEL) { _, payloadJson ->
+            handleIncomingQuery(payloadJson)
         }
-
-        val router = CefMessageRouter.create(config, handler)
-        messageRouter = router
-
-        // Register on the shared CefClient
-        val cefClient = MCEF.INSTANCE.client.handle
-        cefClient.addMessageRouter(router)
-
-        logger.info("[WebDataReader] Message router installed (crowmapQuery/crowmapQueryCancel)")
+        logger.info("[WebDataReader] Bridge query listener installed (channel=$QUERY_CHANNEL)")
     }
 
     /**
-     * Removes the message router and cancels all pending work.
+     * Removes the bridge listener and cancels all pending work.
      */
     fun shutdown() {
-        messageRouter?.let { router ->
-            try {
-                MCEF.INSTANCE.client.handle.removeMessageRouter(router)
-            } catch (_: Exception) { /* MCEF may already be shut down */ }
-            router.dispose()
-        }
-        messageRouter = null
+        querySubscription?.unsubscribe()
+        querySubscription = null
 
         // Complete all pending futures exceptionally
         pendingQueries.forEach { (_, future) ->
@@ -145,19 +106,19 @@ object WebDataReader {
      * Executes arbitrary JavaScript on the current page (fire-and-forget, no return value).
      */
     fun executeJs(code: String) {
-        val browser = BrowserManager.browser
-        if (browser == null) {
+        val session = BrowserManager.session
+        if (session == null) {
             logger.warn("[WebDataReader] executeJs called but no browser is available")
             return
         }
-        browser.executeJavaScript(code, browser.url ?: "", 0)
+        session.executeScript(code)
     }
 
     /**
      * Evaluates a JavaScript **expression** and returns the result as a [CompletableFuture<String>].
      *
      * Under the hood this injects a small JS snippet that evaluates [jsExpression],
-     * converts the result to a string, and sends it back via `window.crowmapQuery`.
+     * converts the result to a string, and sends it back through the Graphene bridge.
      *
      * @param jsExpression A JS expression whose result will be converted to a string
      *                     (e.g. `"document.querySelector('#hp').innerText"`).
@@ -183,23 +144,22 @@ object WebDataReader {
         // The expression is embedded directly (not via eval) so multi-line
         // expressions with comments and newlines work correctly.
         // The wrapper converts the result to a string and posts it through
-        // the CEF message-router bridge.
+        // the Graphene bridge (globalThis.grapheneBridge), if exposed to this document.
         val js = """
             (function() {
+                function reply(payload) {
+                    if (globalThis.grapheneBridge) {
+                        globalThis.grapheneBridge.ready().then(function() {
+                            globalThis.grapheneBridge.emit('$QUERY_CHANNEL', payload);
+                        });
+                    }
+                }
                 try {
                     var __res = (${jsExpression});
                     var __val = (__res === null || __res === undefined) ? '' : String(__res);
-                    window.crowmapQuery({
-                        request: JSON.stringify({ id: $id, result: __val }),
-                        onSuccess: function(r) {},
-                        onFailure: function(c, m) {}
-                    });
+                    reply({ id: $id, result: __val });
                 } catch(e) {
-                    window.crowmapQuery({
-                        request: JSON.stringify({ id: $id, error: String(e) }),
-                        onSuccess: function(r) {},
-                        onFailure: function(c, m) {}
-                    });
+                    reply({ id: $id, error: String(e) });
                 }
             })();
         """.trimIndent()
@@ -254,11 +214,11 @@ object WebDataReader {
         val js = """
             (function() {
                 var __results = { $entries };
-                window.crowmapQuery({
-                    request: JSON.stringify({ id: $id, results: __results }),
-                    onSuccess: function(r) {},
-                    onFailure: function(c, m) {}
-                });
+                if (globalThis.grapheneBridge) {
+                    globalThis.grapheneBridge.ready().then(function() {
+                        globalThis.grapheneBridge.emit('$QUERY_CHANNEL', { id: $id, results: __results });
+                    });
+                }
             })();
         """.trimIndent()
 
@@ -336,50 +296,39 @@ object WebDataReader {
     // ── Internal ─────────────────────────────────────────────────────────
 
     /**
-     * Handles an incoming message from the JS bridge. The request is a JSON string
+     * Handles an incoming message from the bridge. The payload is a JSON string
      * with the shape `{ "id": <number>, "result": "<string>" }` or
      * `{ "id": <number>, "error": "<string>" }` or
      * `{ "id": <number>, "results": { … } }`.
      */
-    private fun handleIncomingQuery(request: String, callback: CefQueryCallback): Boolean {
+    private fun handleIncomingQuery(payloadJson: String) {
         try {
-            val id = extractJsonLong(request, "id")
+            val id = extractJsonLong(payloadJson, "id")
             if (id == null) {
-                logger.warn("[WebDataReader] Received query without id: $request")
-                callback.failure(1, "Missing id")
-                return true
+                logger.warn("[WebDataReader] Received query without id: $payloadJson")
+                return
             }
 
-            val future = pendingQueries.remove(id)
-            if (future == null) {
-                // Likely timed out already
-                callback.success("ok")
-                return true
-            }
+            val future = pendingQueries.remove(id) ?: return // Likely timed out already
 
-            val error = extractJsonString(request, "error")
+            val error = extractJsonString(payloadJson, "error")
             if (error != null) {
                 future.completeExceptionally(RuntimeException("JS error: $error"))
-                callback.success("ok")
-                return true
+                return
             }
 
             // Check for multi-result payload
-            val resultsStart = request.indexOf("\"results\"")
+            val resultsStart = payloadJson.indexOf("\"results\"")
             if (resultsStart >= 0) {
                 // For multi queries, pass the raw JSON so the caller can parse the results map
-                future.complete(request)
+                future.complete(payloadJson)
             } else {
-                val result = extractJsonString(request, "result") ?: ""
+                val result = extractJsonString(payloadJson, "result") ?: ""
                 future.complete(result)
             }
-
-            callback.success("ok")
         } catch (e: Exception) {
             logger.error("[WebDataReader] Error handling query: ${e.message}", e)
-            callback.failure(2, e.message ?: "Unknown error")
         }
-        return true
     }
 
     // ── Minimal JSON helpers (avoids adding a JSON library dependency) ───
@@ -487,4 +436,3 @@ object WebDataReader {
         }
     }
 }
-
