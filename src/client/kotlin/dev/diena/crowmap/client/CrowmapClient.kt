@@ -30,6 +30,17 @@ class CrowmapClient : ClientModInitializer {
     }
 
     override fun onInitializeClient() {
+        // On macOS, JCEF's org.cef.CefApp lazily inits AWT's Toolkit via
+        // SwingUtilities.invokeLater the first time it runs (later, on a
+        // background thread once Graphene starts its CEF runtime). If GLFW
+        // has already claimed the Cocoa main thread by then (-XstartOnFirstThread),
+        // that lazy Toolkit init deadlocks forever fighting GLFW for NSApplication
+        // ownership. Force it here, before GLFW/Minecraft's window exists, so AWT
+        // and GLFW don't race for the same Cocoa main-thread handshake.
+        if (System.getProperty("os.name").contains("Mac")) {
+            java.awt.Toolkit.getDefaultToolkit()
+        }
+
         // Load config from disk (or create defaults) before anything else reads it
         CrowmapConfig.wrapper
 
