@@ -169,6 +169,25 @@ object BrowserManager {
         session?.navigate(url)
     }
 
+    /** The currently loaded URL, or the configured target URL if no browser session exists yet. */
+    fun currentUrl(): String = session?.currentUrl() ?: getTargetUrl()
+
+    fun canGoBack(): Boolean = session?.canGoBack() ?: false
+
+    fun canGoForward(): Boolean = session?.canGoForward() ?: false
+
+    fun goBack() {
+        session?.let { if (it.canGoBack()) it.goBack() }
+    }
+
+    fun goForward() {
+        session?.let { if (it.canGoForward()) it.goForward() }
+    }
+
+    fun reload() {
+        session?.reload()
+    }
+
     /**
      * Closes and cleans up the shared browser surface.
      */
