@@ -6,11 +6,15 @@ import dev.diena.crowmap.client.CrowmapClient
 import dev.diena.crowmap.client.features.browser.BrowserManager
 import io.github.trethore.graphene.api.browser.BrowserCursor
 import io.github.trethore.graphene.fabric.api.surface.BrowserSurface
+import io.wispforest.owo.ui.base.BaseOwoScreen
+import io.wispforest.owo.ui.component.ButtonComponent
+import io.wispforest.owo.ui.component.DropdownComponent
+import io.wispforest.owo.ui.component.TextBoxComponent
+import io.wispforest.owo.ui.component.UIComponents
+import io.wispforest.owo.ui.container.FlowLayout
+import io.wispforest.owo.ui.container.UIContainers
+import io.wispforest.owo.ui.core.*
 import net.minecraft.client.gui.GuiGraphics
-import net.minecraft.client.gui.components.AbstractWidget
-import net.minecraft.client.gui.components.Button
-import net.minecraft.client.gui.components.EditBox
-import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.input.CharacterEvent
 import net.minecraft.client.input.KeyEvent
 import net.minecraft.client.input.MouseButtonEvent
@@ -18,10 +22,11 @@ import net.minecraft.network.chat.Component
 import org.lwjgl.glfw.GLFW
 
 /**
- * Full-screen browser screen with Graphene browser rendering, full mouse/keyboard forwarding,
- * and a vanilla toolbar (back/forward/reload/URL bar) plus a right-click jump context menu.
+ * Full-screen browser screen using owo-ui for layout, with Graphene browser rendering
+ * and full mouse/keyboard forwarding. Has a toolbar (back/forward/reload/URL bar) and a
+ * right-click jump context menu (owo-ui's [DropdownComponent]).
  */
-class BrowserScreen : Screen(Component.literal("CrowMap Browser")) {
+class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Browser")) {
 
     private val mc = CrowmapClient.mc
     private val logger = CrowmapClient.logger
@@ -31,22 +36,52 @@ class BrowserScreen : Screen(Component.literal("CrowMap Browser")) {
     private var browserWidth = BrowserManager.MAX_BROWSER_WIDTH
     private var browserHeight = BrowserManager.MAX_BROWSER_HEIGHT
 
-    /** True when a mouse press was swallowed by the toolbar or context menu; paired release is also suppressed. */
+    /** True when a mouse press was swallowed by the toolbar or an open dropdown; paired release is also suppressed. */
     private var suppressBrowserMouseButton = false
 
-    // --- Toolbar ---
+    private lateinit var backButton: ButtonComponent
+    private lateinit var forwardButton: ButtonComponent
+    private lateinit var urlBox: TextBoxComponent
 
-    private lateinit var backButton: Button
-    private lateinit var forwardButton: Button
-    private lateinit var reloadButton: Button
-    private lateinit var urlBox: EditBox
+    override fun createAdapter(): OwoUIAdapter<FlowLayout> {
+        return OwoUIAdapter.create(this, UIContainers::verticalFlow)
+    }
 
-    // --- Context menu (right-click "jump" popup) ---
+    override fun build(rootComponent: FlowLayout) {
+        // Use BLANK surface so owo-ui doesn't paint over the browser texture
+        rootComponent
+            .surface(Surface.BLANK)
+            .horizontalAlignment(HorizontalAlignment.CENTER)
+            .verticalAlignment(VerticalAlignment.TOP)
 
-    private val contextMenuWidgets = mutableListOf<AbstractWidget>()
-    private var contextMenuBounds: IntArray? = null
-    private var contextMenuGeneration = 0
-    private val contextMenuOpen: Boolean get() = contextMenuWidgets.isNotEmpty()
+        // Same panel surface DropdownComponent uses for the jump-menu popup, so the toolbar
+        // reads as the same UI system rather than a bolted-on vanilla control strip.
+        val toolbar = UIContainers.horizontalFlow(Sizing.fill(100), Sizing.fixed(TOOLBAR_HEIGHT))
+        toolbar.surface(Surface.flat(0xC7000000.toInt()).and(Surface.blur(3f, 5f)).and(Surface.outline(0xFF121212.toInt())))
+        toolbar.verticalAlignment(VerticalAlignment.CENTER)
+        toolbar.padding(Insets.of(2))
+        toolbar.gap(2)
+        toolbar.positioning(Positioning.absolute(0, 0))
+
+        backButton = UIComponents.button(Component.literal("<")) { BrowserManager.goBack() }
+        backButton.sizing(Sizing.fixed(20), Sizing.fixed(20))
+        backButton.renderer(TOOLBAR_BUTTON_RENDERER)
+        forwardButton = UIComponents.button(Component.literal(">")) { BrowserManager.goForward() }
+        forwardButton.sizing(Sizing.fixed(20), Sizing.fixed(20))
+        forwardButton.renderer(TOOLBAR_BUTTON_RENDERER)
+        val reloadButton = UIComponents.button(Component.literal("R")) { BrowserManager.reload() }
+        reloadButton.sizing(Sizing.fixed(20), Sizing.fixed(20))
+        reloadButton.renderer(TOOLBAR_BUTTON_RENDERER)
+        urlBox = UIComponents.textBox(Sizing.fill(100))
+        urlBox.text(BrowserManager.currentUrl())
+        urlBox.setBordered(false)
+
+        toolbar.child(backButton)
+        toolbar.child(forwardButton)
+        toolbar.child(reloadButton)
+        toolbar.child(urlBox)
+        rootComponent.child(toolbar)
+    }
 
     override fun init() {
         super.init()
@@ -55,59 +90,12 @@ class BrowserScreen : Screen(Component.literal("CrowMap Browser")) {
         browserWidth = bw
         browserHeight = bh
 
+        BrowserManager.requestHighResolution()
+        BrowserManager.showFullScreenChrome()
         surface = BrowserManager.getOrCreateBrowser(browserWidth, browserHeight)
         BrowserManager.inputAdapter?.setFocused(true)
 
-        contextMenuWidgets.clear()
-        contextMenuBounds = null
-        contextMenuGeneration++
-
-        backButton = addRenderableWidget(
-            Button.builder(Component.literal("<")) { BrowserManager.goBack() }
-                .bounds(0, 0, BUTTON_SIZE, BUTTON_SIZE)
-                .build()
-        )
-        forwardButton = addRenderableWidget(
-            Button.builder(Component.literal(">")) { BrowserManager.goForward() }
-                .bounds(0, 0, BUTTON_SIZE, BUTTON_SIZE)
-                .build()
-        )
-        reloadButton = addRenderableWidget(
-            Button.builder(Component.literal("R")) { BrowserManager.reload() }
-                .bounds(0, 0, BUTTON_SIZE, BUTTON_SIZE)
-                .build()
-        )
-        urlBox = addRenderableWidget(EditBox(mc.font, 0, 0, 100, BUTTON_SIZE, Component.literal("Browser URL")))
-        urlBox.setMaxLength(1024)
-        urlBox.setValue(BrowserManager.currentUrl())
-
-        layoutToolbar()
-
         CrowmapClient.debug("BrowserScreen init: browserRes=${browserWidth}x${browserHeight}, guiSize=${width}x${height}, window=${mc.window.width}x${mc.window.height}, surface=${surface != null}")
-    }
-
-    private fun layoutToolbar() {
-        var x = PADDING
-        backButton.setX(x); backButton.setY(PADDING)
-        x += BUTTON_SIZE + PADDING
-        forwardButton.setX(x); forwardButton.setY(PADDING)
-        x += BUTTON_SIZE + PADDING
-        reloadButton.setX(x); reloadButton.setY(PADDING)
-        x += BUTTON_SIZE + PADDING
-
-        urlBox.setX(x); urlBox.setY(PADDING)
-        urlBox.setWidth((width - x - PADDING).coerceAtLeast(60))
-    }
-
-    private fun updateToolbarState() {
-        backButton.active = BrowserManager.canGoBack()
-        forwardButton.active = BrowserManager.canGoForward()
-        if (!urlBox.isFocused) {
-            val current = BrowserManager.currentUrl()
-            if (urlBox.value != current) {
-                urlBox.setValue(current)
-            }
-        }
     }
 
     private fun navigateToUrlBox() {
@@ -115,14 +103,10 @@ class BrowserScreen : Screen(Component.literal("CrowMap Browser")) {
         if (text.isEmpty()) return
         if (!text.contains("://")) text = "https://$text"
         BrowserManager.navigate(text)
-        clearFocus()
+        urlBox.setFocused(false)
     }
 
     override fun resize(width: Int, height: Int) {
-        contextMenuWidgets.clear()
-        contextMenuBounds = null
-        contextMenuGeneration++
-
         super.resize(width, height)
 
         val (bw, bh) = BrowserManager.computeBrowserSize()
@@ -141,10 +125,16 @@ class BrowserScreen : Screen(Component.literal("CrowMap Browser")) {
             renderLoadingScreen(context, if (s == null) "Initializing browser..." else "Loading page...")
         }
 
-        context.fill(0, 0, width, TOOLBAR_HEIGHT, 0xCC101010.toInt())
-        updateToolbarState()
+        if (!urlBox.isFocused) {
+            val current = BrowserManager.currentUrl()
+            if (urlBox.value != current) {
+                urlBox.text(current)
+            }
+        }
+        backButton.active(BrowserManager.canGoBack())
+        forwardButton.active(BrowserManager.canGoForward())
 
-        // Render toolbar/context-menu widgets on top of the browser texture
+        // Render owo-ui overlay on top
         super.render(context, mouseX, mouseY, delta)
     }
 
@@ -170,101 +160,33 @@ class BrowserScreen : Screen(Component.literal("CrowMap Browser")) {
         BrowserCursor.ARROW -> CursorTypes.ARROW
     }
 
-    // --- Context menu (reimplementation of owo-ui's DropdownComponent.openContextMenu) ---
-
-    private fun isPointInContextMenu(x: Double, y: Double): Boolean {
-        val b = contextMenuBounds ?: return false
-        return x >= b[0] && x <= b[0] + b[2] && y >= b[1] && y <= b[1] + b[3]
-    }
-
-    private fun clearContextMenuWidgets() {
-        contextMenuWidgets.forEach { removeWidget(it) }
-        contextMenuWidgets.clear()
-        contextMenuBounds = null
-    }
-
-    private fun closeContextMenu() {
-        contextMenuGeneration++
-        clearContextMenuWidgets()
-    }
-
-    private fun openContextMenu(guiX: Double, guiY: Double) {
-        contextMenuGeneration++
-        val myGeneration = contextMenuGeneration
-        val browserPixelX = BrowserManager.surface?.toBrowserX(guiX, width) ?: 0
-        val browserPixelY = BrowserManager.surface?.toBrowserY(guiY, height) ?: 0
-
-        // Show immediately with no coordinates so there's no delay, then rebuild once resolved.
-        buildContextMenu(guiX, guiY, null, null)
-
-        ContextPopup.queryMapCoordinates(browserPixelX, browserPixelY).thenAccept { (x, z) ->
-            if (x == null && z == null) return@thenAccept
-            mc.execute {
-                if (mc.screen !== this || myGeneration != contextMenuGeneration) return@execute
-                buildContextMenu(guiX, guiY, x, z)
-            }
-        }
-    }
-
-    private fun buildContextMenu(guiX: Double, guiY: Double, coordX: Int?, coordZ: Int?) {
-        clearContextMenuWidgets()
-
-        val jumpLabel = if (coordX != null && coordZ != null) "Jump $coordX $coordZ" else "Jump (no coords)"
-        val fleetJumpLabel = if (coordX != null && coordZ != null) "Fleet Jump $coordX $coordZ" else "Fleet Jump (no coords)"
-
-        val entries = listOf<Pair<Component, () -> Unit>>(
-            Component.literal("Close") to { closeContextMenu() },
-            Component.literal(jumpLabel) to {
-                closeContextMenu()
-                if (coordX != null && coordZ != null) ContextPopup.executeJump(coordX, coordZ)
-            },
-            Component.literal(fleetJumpLabel) to {
-                closeContextMenu()
-                if (coordX != null && coordZ != null) ContextPopup.executeFleetJump(coordX, coordZ)
-            }
-        )
-
-        val x = guiX.toInt().coerceIn(0, (width - CONTEXT_MENU_WIDTH).coerceAtLeast(0))
-        var y = guiY.toInt()
-        entries.forEach { (label, action) ->
-            val btn = Button.builder(label) { action() }
-                .bounds(x, y, CONTEXT_MENU_WIDTH, CONTEXT_MENU_ENTRY_HEIGHT)
-                .build()
-            contextMenuWidgets += addRenderableWidget(btn)
-            y += CONTEXT_MENU_ENTRY_HEIGHT
-        }
-        contextMenuBounds = intArrayOf(x, guiY.toInt(), CONTEXT_MENU_WIDTH, entries.size * CONTEXT_MENU_ENTRY_HEIGHT)
-    }
-
     // --- Mouse input forwarding ---
     // The input adapter maps GUI-scaled coordinates (relative to the full-screen surface,
     // origin at 0,0) into the browser's fixed pixel resolution internally.
 
+    private fun hasOpenDropdown(): Boolean =
+        uiAdapter.rootComponent.children().any { it is DropdownComponent }
+
     override fun mouseClicked(event: MouseButtonEvent, isDoubleClick: Boolean): Boolean {
         // Right-click (button 1) over the map area → open the CrowMap context popup
         if (event.button() == GLFW.GLFW_MOUSE_BUTTON_RIGHT && event.y() >= TOOLBAR_HEIGHT) {
-            openContextMenu(event.x(), event.y())
+            ContextPopup.open(
+                screen = this,
+                root = uiAdapter.rootComponent,
+                browserPixelX = BrowserManager.surface?.toBrowserX(event.x(), width) ?: 0,
+                browserPixelY = BrowserManager.surface?.toBrowserY(event.y(), height) ?: 0,
+                guiX = event.x(),
+                guiY = event.y()
+            )
             return true
         }
-
-        // If the context menu is open, this click either lands on it (owo-ui behaved the same
-        // way: the click is fully consumed by the popup) or dismisses it — never both UI and page.
-        if (contextMenuOpen) {
-            if (!isPointInContextMenu(event.x(), event.y())) {
-                closeContextMenu()
-            }
+        // If a dropdown is open, or the click is on the toolbar, let owo-ui consume the click
+        // and suppress forwarding to the browser — the user is interacting with UI, not the map.
+        if (hasOpenDropdown() || event.y() < TOOLBAR_HEIGHT) {
             suppressBrowserMouseButton = true
             super.mouseClicked(event, isDoubleClick)
             return true
         }
-
-        // Toolbar clicks go to the widgets, not the browser underneath.
-        if (event.y() < TOOLBAR_HEIGHT) {
-            suppressBrowserMouseButton = true
-            super.mouseClicked(event, isDoubleClick)
-            return true
-        }
-
         suppressBrowserMouseButton = false
         BrowserManager.inputAdapter?.mouseButton(
             event.x(), event.y(), 0, 0, width, height,
@@ -312,6 +234,10 @@ class BrowserScreen : Screen(Component.literal("CrowMap Browser")) {
     // --- Keyboard input forwarding ---
 
     override fun keyPressed(input: KeyEvent): Boolean {
+        if (input.key() == GLFW.GLFW_KEY_ESCAPE) {
+            onClose()
+            return true
+        }
         if (urlBox.isFocused && (input.key() == GLFW.GLFW_KEY_ENTER || input.key() == GLFW.GLFW_KEY_KP_ENTER)) {
             navigateToUrlBox()
             return true
@@ -336,14 +262,17 @@ class BrowserScreen : Screen(Component.literal("CrowMap Browser")) {
 
     override fun onClose() {
         // Don't close the browser - it's shared across screen, HUD, projection
+        BrowserManager.releaseHighResolution()
+        BrowserManager.hideFullScreenChrome()
         super.onClose()
     }
 
     companion object {
         private const val TOOLBAR_HEIGHT = 24
-        private const val BUTTON_SIZE = 20
-        private const val PADDING = 2
-        private const val CONTEXT_MENU_WIDTH = 160
-        private const val CONTEXT_MENU_ENTRY_HEIGHT = 20
+
+        // Matches DropdownComponent.Button's own hover fill (0x44FFFFFF), transparent otherwise —
+        // same look as the jump-menu popup entries instead of vanilla's 3D-bevel button sprite.
+        private val TOOLBAR_BUTTON_RENDERER: ButtonComponent.Renderer =
+            ButtonComponent.Renderer.flat(0x00000000, 0x44FFFFFF.toInt(), 0x00000000)
     }
 }

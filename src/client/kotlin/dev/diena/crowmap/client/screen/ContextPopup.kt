@@ -79,6 +79,16 @@ object ContextPopup {
         else
             "Fleet Jump (no coords)"
 
+        val addRouteHereLabel  = if (coordX != null && coordZ != null)
+            "Add Route $coordX $coordZ"
+        else
+            "Add Route (no coords)"
+
+        val copyCoordinateLabel = if (coordX != null && coordZ != null)
+            "Copy $coordX $coordZ"
+        else
+            "Copy (no coords)"
+
         DropdownComponent.openContextMenu(
             screen,
             root,
@@ -103,6 +113,26 @@ object ContextPopup {
                     onClose?.invoke()
                     if (coordX != null && coordZ != null) {
                         executeFleetJump(coordX, coordZ)
+                    }
+                }
+                .button(Component.literal(addRouteHereLabel)) { dd ->
+                    dd.remove()
+                    onClose?.invoke()
+                    if (coordX != null && coordZ != null) {
+                        queryActiveWorld().thenAccept { world ->
+                            if (world == null) {
+                                logger.warn("[ContextPopup] Could not determine the active Dynmap world; route not added")
+                                return@thenAccept
+                            }
+                            mc.execute { addRouteFromCoordinates(world, coordX, coordZ) }
+                        }
+                    }
+                }
+                .button(Component.literal(copyCoordinateLabel)) { dd ->
+                    dd.remove()
+                    onClose?.invoke()
+                    if (coordX != null && coordZ != null) {
+                        copyCoordinateToClipboard(coordX, coordZ)
                     }
                 }
         }
@@ -214,6 +244,48 @@ object ContextPopup {
         }
     }
 
+    /**
+     * Queries the Dynmap page for the name of the world it currently has active.
+     *
+     * Deliberately doesn't read the URL — Dynmap and LiveAtlas are both single-page apps that can
+     * switch the displayed world without a navigation, so the URL's world segment can be stale.
+     * Reads the page's live JS state instead (same approach as [dev.diena.crowmap.client.features.browser.PlayerMapMarker]):
+     *
+     * 1. LiveAtlas: `store.state.currentWorld.name` (Vuex-like store via the Vue 3 app instance)
+     * 2. Legacy Dynmap: `window.dynmap.world.name`
+     */
+    internal fun queryActiveWorld(): java.util.concurrent.CompletableFuture<String?> {
+        val js = """
+            (function() {
+                // Strategy 1: LiveAtlas
+                try {
+                    var appEl = document.querySelector('#app');
+                    if (appEl && appEl.__vue_app__) {
+                        var store = appEl.__vue_app__.config.globalProperties.${'$'}store;
+                        var world = store && store.state && store.state.currentWorld;
+                        if (world && world.name) return world.name;
+                    }
+                } catch (_) {}
+
+                // Strategy 2: Legacy Dynmap
+                try {
+                    if (window.dynmap && window.dynmap.world && window.dynmap.world.name) {
+                        return window.dynmap.world.name;
+                    }
+                } catch (_) {}
+
+                return '';
+            })()
+        """.trimIndent()
+
+        return WebDataReader.queryJs(js, timeoutMs = 2000).thenApply { result ->
+            result.trim().ifBlank { null }
+        }.exceptionally {
+            logger.debug("[ContextPopup] Active world query failed: ${it.message}")
+            null
+        }
+    }
+
     // ── Jump execution ───────────────────────────────────────────────────
 
     /**
@@ -236,6 +308,27 @@ object ContextPopup {
         player.connection.sendCommand("fleet jump $x $z")
         logger.info("[ContextPopup] Fleet Jump to $x $z")
     }
+
+    internal fun copyCoordinateToClipboard(x: Int, z: Int) {
+
+        mc.setScreen(null)
+	    CrowmapClient.mc.keyboardHandler.clipboard = "$x $z"
+
+        logger.info("[ContextPopup] Copied Coordinates $x $z")
+
+    }
+
+    internal fun addRouteFromCoordinates(world: String, x: Int, z: Int) {
+
+        val player = mc.player ?: return
+
+        mc.setScreen(null)
+        player.connection.sendCommand("route add $world $x $z")
+
+        logger.info("[ContextPopup] Added Route $world $x $z")
+
+    }
+
 }
 
 

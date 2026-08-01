@@ -2,6 +2,7 @@ package dev.diena.crowmap.client
 
 import dev.diena.crowmap.client.config.CrowmapConfig
 import dev.diena.crowmap.client.features.browser.BrowserManager
+import dev.diena.crowmap.client.features.browser.PlayerMapMarker
 import dev.diena.crowmap.client.features.hud.MapHudOverlay
 import dev.diena.crowmap.client.features.hud.OverlayHud
 import dev.diena.crowmap.client.features.world.SignAnchorTracker
@@ -114,6 +115,13 @@ class CrowmapClient : ClientModInitializer {
             "hide-leaflet-tooltips",
             ".leaflet-tooltip { display: none !important; }"
         )
+
+        // Sidebar/coordinate display only fit in the full-screen browser view — hidden by
+        // default (HUD/projection), shown again while BrowserScreen is open.
+        BrowserManager.hideFullScreenChrome()
+
+        // Draw the player's position on the Dynmap/LiveAtlas page itself
+        PlayerMapMarker.install()
 
         // Register the HUD minimap overlay
         MapHudOverlay.register()

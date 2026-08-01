@@ -46,6 +46,7 @@ object WorldProjectionScreen {
         val widget = BrowserProjectionWidget()
         val (bw, bh) = BrowserManager.computeBrowserSize()
 
+        BrowserManager.requestHighResolution()
         display = BraidDisplay(quad, bw, bh, widget).renderAutomatically()
         BraidDisplayBinding.activate(display!!)
 
@@ -53,8 +54,10 @@ object WorldProjectionScreen {
     }
 
     fun deactivate() {
-        display?.let { BraidDisplayBinding.deactivate(it) }
+        if (display == null) return
+        BraidDisplayBinding.deactivate(display!!)
         display = null
+        BrowserManager.releaseHighResolution()
     }
 
     private var lastResizeNano = 0L

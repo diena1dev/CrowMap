@@ -68,6 +68,11 @@ repositories {
 // for io.github.trethore.jcefgithub.* once the first was fixed) even though
 // compilation succeeds. So we extract both nested jars ourselves and put them
 // on the runtime classpath directly.
+//
+// This is purely a `runClient`/dev-environment workaround — it does NOT affect what ships in
+// CrowMap's built jar. graphene-ui itself is separately `include()`'d below (jar-in-jar) for
+// that; Fabric Loader's real (non-Loom) mod loading resolves graphene-ui's own declared nested
+// jars recursively on its own, so no extraction is needed for a real production build.
 val grapheneVersion = "2.1.0"
 
 val grapheneUiJar: Configuration by configurations.creating
@@ -99,11 +104,18 @@ dependencies {
     modImplementation("net.fabricmc.fabric-api:fabric-api:${project.property("fabric_version")}")
     modImplementation("io.github.trethore:graphene-ui-1.21.11:$grapheneVersion")
     grapheneUiJar("io.github.trethore:graphene-ui-1.21.11:$grapheneVersion") { isTransitive = false }
-    // implementation (not compileOnly) so this also lands on the runtime classpath —
-    // Loom's include() rejects a bare file collection ("not a module component"), so this
-    // can't be jar-in-jar'd into CrowMap's own distributed jar; it's compile+runClient only.
-    // If a shipped build hits the same NoClassDefFoundError, this jar needs bundling some
-    // other way (e.g. shading it into the built jar's classes directly).
+    // Jar-in-jar into CrowMap's own shipped mod jar. graphene-ui's fabric.mod.json declares its
+    // own nested jars (common-*.jar, jcefgithub-*.jar under META-INF/jars/) via the standard
+    // Fabric "jars" mechanism, which Fabric Loader resolves recursively at real (non-dev) runtime
+    // — so including the outer jar here is enough to ship all of it. Without this, prod servers
+    // never receive graphene-ui at all (only the dev-run classpath workaround below did), hence
+    // "graphene is not present" outside the dev environment.
+    include("io.github.trethore:graphene-ui-1.21.11:$grapheneVersion")
+    // implementation (not compileOnly) so this also lands on the runClient dev-runtime classpath.
+    // Loom's include() rejects a bare file collection ("not a module component"), so these
+    // extracted files themselves can't be jar-in-jar'd — but they don't need to be: they're
+    // already inside the graphene-ui jar included below, which ships them via its own
+    // fabric.mod.json "jars" declaration. This is compile+runClient only.
     implementation(files(grapheneExtractedJars).builtBy(extractGrapheneNestedJars))
     modImplementation("io.wispforest:owo-lib:0.13.0-alpha.16+1.21.11")
     // owo-lib annotation processor – generates CrowmapConfigWrapper from CrowmapConfigModel.
