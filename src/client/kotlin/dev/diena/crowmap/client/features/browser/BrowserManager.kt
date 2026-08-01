@@ -229,6 +229,20 @@ object BrowserManager {
     }
 
     /**
+     * Fully tears down and recreates the shared CEF browser session (as opposed to [reload],
+     * which just reloads the page within the existing session) — for when the browser itself gets
+     * stuck rather than just the page. Callers holding their own [BrowserSurface]/input-adapter
+     * references (e.g. [dev.diena.crowmap.client.screen.BrowserScreen]) must refresh them from
+     * [surface]/[inputAdapter] afterward, same as after any other [getOrCreateBrowser] call.
+     */
+    fun restart() {
+        logger.info("[CrowMap] Restarting browser session")
+        closeBrowser()
+        val (bw, bh) = computeBrowserSize()
+        getOrCreateBrowser(bw, bh)
+    }
+
+    /**
      * Closes and cleans up the shared browser surface.
      */
     fun closeBrowser() {

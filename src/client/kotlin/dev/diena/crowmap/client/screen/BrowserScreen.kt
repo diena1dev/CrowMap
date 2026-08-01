@@ -15,6 +15,7 @@ import io.wispforest.owo.ui.container.FlowLayout
 import io.wispforest.owo.ui.container.UIContainers
 import io.wispforest.owo.ui.core.*
 import net.minecraft.client.gui.GuiGraphics
+import net.minecraft.client.gui.components.Tooltip
 import net.minecraft.client.input.CharacterEvent
 import net.minecraft.client.input.KeyEvent
 import net.minecraft.client.input.MouseButtonEvent
@@ -69,9 +70,20 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
         forwardButton = UIComponents.button(Component.literal(">")) { BrowserManager.goForward() }
         forwardButton.sizing(Sizing.fixed(20), Sizing.fixed(20))
         forwardButton.renderer(TOOLBAR_BUTTON_RENDERER)
-        val reloadButton = UIComponents.button(Component.literal("R")) { BrowserManager.reload() }
+        val reloadButton = UIComponents.button(Component.literal("R")) {
+            if (isShiftDown()) {
+                // Shift+reload: the page itself isn't necessarily the problem — restart the
+                // whole CEF session, for when the browser itself gets stuck rather than the page.
+                BrowserManager.restart()
+                surface = BrowserManager.surface
+                BrowserManager.inputAdapter?.setFocused(true)
+            } else {
+                BrowserManager.reload()
+            }
+        }
         reloadButton.sizing(Sizing.fixed(20), Sizing.fixed(20))
         reloadButton.renderer(TOOLBAR_BUTTON_RENDERER)
+        reloadButton.setTooltip(Tooltip.create(Component.literal("Reload (Shift: restart browser)")))
         urlBox = UIComponents.textBox(Sizing.fill(100))
         urlBox.text(BrowserManager.currentUrl())
         urlBox.setBordered(false)
@@ -96,6 +108,12 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
         BrowserManager.inputAdapter?.setFocused(true)
 
         CrowmapClient.debug("BrowserScreen init: browserRes=${browserWidth}x${browserHeight}, guiSize=${width}x${height}, window=${mc.window.width}x${mc.window.height}, surface=${surface != null}")
+    }
+
+    private fun isShiftDown(): Boolean {
+        val handle = mc.window.handle()
+        return GLFW.glfwGetKey(handle, GLFW.GLFW_KEY_LEFT_SHIFT) == GLFW.GLFW_PRESS ||
+            GLFW.glfwGetKey(handle, GLFW.GLFW_KEY_RIGHT_SHIFT) == GLFW.GLFW_PRESS
     }
 
     private fun navigateToUrlBox() {
