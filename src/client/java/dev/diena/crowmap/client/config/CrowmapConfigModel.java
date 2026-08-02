@@ -15,6 +15,8 @@ public class CrowmapConfigModel {
     @SectionHeader("Browser")
     public String mapUrl = "https://survival.horizonsend.net/";
 
+    public boolean showUrlBar = false;
+
     public boolean useLocalLiveAtlas = false;
 
     public boolean debugLogging = false;

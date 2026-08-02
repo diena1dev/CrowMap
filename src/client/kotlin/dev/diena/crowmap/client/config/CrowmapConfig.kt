@@ -27,6 +27,10 @@ object CrowmapConfig {
         get() = W.mapUrl()
         set(value) = W.mapUrl(value)
 
+    var showUrlBar: Boolean
+        get() = W.showUrlBar()
+        set(value) = W.showUrlBar(value)
+
     var useLocalLiveAtlas: Boolean
         get() = W.useLocalLiveAtlas()
         set(value) = W.useLocalLiveAtlas(value)

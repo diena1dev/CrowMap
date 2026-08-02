@@ -3,6 +3,7 @@ package dev.diena.crowmap.client.screen
 import com.mojang.blaze3d.platform.cursor.CursorType
 import com.mojang.blaze3d.platform.cursor.CursorTypes
 import dev.diena.crowmap.client.CrowmapClient
+import dev.diena.crowmap.client.config.CrowmapConfig
 import dev.diena.crowmap.client.features.browser.BrowserManager
 import io.github.trethore.graphene.api.browser.BrowserCursor
 import io.github.trethore.graphene.fabric.api.surface.BrowserSurface
@@ -57,7 +58,11 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
 
         // Same panel surface DropdownComponent uses for the jump-menu popup, so the toolbar
         // reads as the same UI system rather than a bolted-on vanilla control strip.
-        val toolbar = UIContainers.horizontalFlow(Sizing.fill(100), Sizing.fixed(TOOLBAR_HEIGHT))
+        // With the URL bar disabled, the toolbar is just 3 small buttons — shrink it to fit them
+        // instead of reserving a full-width strip, and let the map extend underneath (see
+        // viewportTop()/isPointInToolbar()).
+        val toolbarWidthSizing = if (CrowmapConfig.showUrlBar) Sizing.fill(100) else Sizing.content()
+        val toolbar = UIContainers.horizontalFlow(toolbarWidthSizing, Sizing.fixed(TOOLBAR_HEIGHT))
         toolbar.surface(Surface.flat(0xC7000000.toInt()).and(Surface.blur(3f, 5f)).and(Surface.outline(0xFF121212.toInt())))
         toolbar.verticalAlignment(VerticalAlignment.CENTER)
         toolbar.padding(Insets.of(2))
@@ -91,7 +96,9 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
         toolbar.child(backButton)
         toolbar.child(forwardButton)
         toolbar.child(reloadButton)
-        toolbar.child(urlBox)
+        if (CrowmapConfig.showUrlBar) {
+            toolbar.child(urlBox)
+        }
         rootComponent.child(toolbar)
 
         // Anchored separately, bottom-left of the screen — not part of the toolbar. Same panel
@@ -164,7 +171,7 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
         val s = surface
         val hasFrame = s?.browser()?.latestFrame()?.isPresent == true
         if (s != null && hasFrame) {
-            s.render(context, 0, TOOLBAR_HEIGHT, width, viewportHeight())
+            s.render(context, 0, viewportTop(), width, viewportHeight())
             context.requestCursor(cursor(s))
         } else {
             renderLoadingScreen(context, if (s == null) "Initializing browser..." else "Loading page...")
@@ -184,18 +191,25 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
     }
 
     private fun renderLoadingScreen(context: GuiGraphics, message: String) {
-        context.fill(0, TOOLBAR_HEIGHT, width, height, 0xCC000000.toInt())
+        context.fill(0, viewportTop(), width, height, 0xCC000000.toInt())
         context.drawCenteredString(
             mc.font,
             message,
             width / 2,
-            TOOLBAR_HEIGHT + viewportHeight() / 2 - 10,
+            viewportTop() + viewportHeight() / 2 - 10,
             0xFFFFFF
         )
     }
 
-    /** The browser viewport's on-screen height — everything below the toolbar. */
-    private fun viewportHeight(): Int = (height - TOOLBAR_HEIGHT).coerceAtLeast(1)
+    /**
+     * Where the browser viewport starts — below the toolbar when the URL bar is shown (it spans
+     * the full width, so the map has to make room for it), or 0 when it's hidden (the toolbar is
+     * just 3 small buttons then, so the map extends underneath them instead — see [isPointInToolbar]).
+     */
+    private fun viewportTop(): Int = if (CrowmapConfig.showUrlBar) TOOLBAR_HEIGHT else 0
+
+    /** The browser viewport's on-screen height. */
+    private fun viewportHeight(): Int = (height - viewportTop()).coerceAtLeast(1)
 
     private fun cursor(s: BrowserSurface): CursorType = when (s.browser().requestedCursor()) {
         BrowserCursor.CROSSHAIR -> CursorTypes.CROSSHAIR
@@ -210,10 +224,21 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
 
     // --- Mouse input forwarding ---
     // The input adapter maps GUI-scaled coordinates into the browser's fixed pixel resolution
-    // internally; the viewport starts below the toolbar, at (0, TOOLBAR_HEIGHT).
+    // internally; the viewport starts at (0, viewportTop()) — below the toolbar when the URL bar
+    // is shown, or the very top of the screen (extending under the compact toolbar) when it's not.
 
     private fun hasOpenDropdown(): Boolean =
         uiAdapter.rootComponent.children().any { it is DropdownComponent }
+
+    /**
+     * The toolbar's actual on-screen bounds — full width when the URL bar is shown, or just
+     * enough for the 3 buttons ([TOOLBAR_COMPACT_WIDTH]) when it's hidden and the map extends
+     * underneath. Kept in sync with the sizing/padding/gap set up in [build].
+     */
+    private fun isPointInToolbar(x: Double, y: Double): Boolean {
+        val toolbarWidth = if (CrowmapConfig.showUrlBar) width else TOOLBAR_COMPACT_WIDTH
+        return x >= 0 && x <= toolbarWidth && y >= 0 && y <= TOOLBAR_HEIGHT
+    }
 
     /** Bottom-left "Me" button's screen bounds — kept in sync with its [build] positioning/sizing. */
     private fun isPointInMyWorldButton(x: Double, y: Double): Boolean {
@@ -225,14 +250,14 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
     override fun mouseClicked(event: MouseButtonEvent, isDoubleClick: Boolean): Boolean {
         // Right-click (button 1) over the map area → open the CrowMap context popup
         if (event.button() == GLFW.GLFW_MOUSE_BUTTON_RIGHT &&
-            event.y() >= TOOLBAR_HEIGHT &&
+            !isPointInToolbar(event.x(), event.y()) &&
             !isPointInMyWorldButton(event.x(), event.y())
         ) {
             ContextPopup.open(
                 screen = this,
                 root = uiAdapter.rootComponent,
                 browserPixelX = BrowserManager.surface?.toBrowserX(event.x(), width) ?: 0,
-                browserPixelY = BrowserManager.surface?.toBrowserY(event.y() - TOOLBAR_HEIGHT, viewportHeight()) ?: 0,
+                browserPixelY = BrowserManager.surface?.toBrowserY(event.y() - viewportTop(), viewportHeight()) ?: 0,
                 guiX = event.x(),
                 guiY = event.y()
             )
@@ -241,14 +266,14 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
         // If a dropdown is open, or the click is on the toolbar or the "Me" button, let owo-ui
         // consume the click and suppress forwarding to the browser — the user is interacting
         // with UI, not the map.
-        if (hasOpenDropdown() || event.y() < TOOLBAR_HEIGHT || isPointInMyWorldButton(event.x(), event.y())) {
+        if (hasOpenDropdown() || isPointInToolbar(event.x(), event.y()) || isPointInMyWorldButton(event.x(), event.y())) {
             suppressBrowserMouseButton = true
             super.mouseClicked(event, isDoubleClick)
             return true
         }
         suppressBrowserMouseButton = false
         BrowserManager.inputAdapter?.mouseButton(
-            event.x(), event.y(), 0, TOOLBAR_HEIGHT, width, viewportHeight(),
+            event.x(), event.y(), 0, viewportTop(), width, viewportHeight(),
             event.button(), true, if (isDoubleClick) 2 else 1, event.modifiers()
         )
         super.mouseClicked(event, isDoubleClick)
@@ -262,7 +287,7 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
             return true
         }
         BrowserManager.inputAdapter?.mouseButton(
-            event.x(), event.y(), 0, TOOLBAR_HEIGHT, width, viewportHeight(),
+            event.x(), event.y(), 0, viewportTop(), width, viewportHeight(),
             event.button(), false, 0, event.modifiers()
         )
         super.mouseReleased(event)
@@ -270,14 +295,14 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
     }
 
     override fun mouseMoved(mouseX: Double, mouseY: Double) {
-        BrowserManager.inputAdapter?.mouseMoved(mouseX, mouseY, 0, TOOLBAR_HEIGHT, width, viewportHeight(), 0)
+        BrowserManager.inputAdapter?.mouseMoved(mouseX, mouseY, 0, viewportTop(), width, viewportHeight(), 0)
         super.mouseMoved(mouseX, mouseY)
     }
 
     override fun mouseScrolled(mouseX: Double, mouseY: Double, horizontalAmount: Double, verticalAmount: Double): Boolean {
         if (super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount)) return true
         BrowserManager.inputAdapter?.mouseScrolled(
-            mouseX, mouseY, 0, TOOLBAR_HEIGHT, width, viewportHeight(), horizontalAmount, verticalAmount, 0
+            mouseX, mouseY, 0, viewportTop(), width, viewportHeight(), horizontalAmount, verticalAmount, 0
         )
         return true
     }
@@ -286,7 +311,7 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
         if (suppressBrowserMouseButton) {
             return super.mouseDragged(click, deltaX, deltaY)
         }
-        BrowserManager.inputAdapter?.mouseDragged(click.x(), click.y(), 0, TOOLBAR_HEIGHT, width, viewportHeight(), click.modifiers())
+        BrowserManager.inputAdapter?.mouseDragged(click.x(), click.y(), 0, viewportTop(), width, viewportHeight(), click.modifiers())
         return true
     }
 
@@ -329,6 +354,10 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
     companion object {
         private const val TOOLBAR_HEIGHT = 24
         private const val MY_WORLD_MARGIN = 0
+
+        // 3 buttons (20 each) + container padding (2 each side) + 2 gaps (2 each) between them —
+        // must match the toolbar's sizing/padding/gap set up in build() when showUrlBar is off.
+        private const val TOOLBAR_COMPACT_WIDTH = 3 * 20 + 2 * 2 + 2 * 2
 
         // Button (24) + container padding (2 on each side) — must match the myWorldContainer/
         // myWorldButton sizing/padding set up in build().
