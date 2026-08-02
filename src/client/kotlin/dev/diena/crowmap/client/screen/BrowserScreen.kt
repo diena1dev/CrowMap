@@ -93,6 +93,20 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
         toolbar.child(reloadButton)
         toolbar.child(urlBox)
         rootComponent.child(toolbar)
+
+        // Anchored separately, bottom-left of the screen — not part of the toolbar. Same panel
+        // surface as the toolbar/jump-menu so it still reads as part of the same UI system.
+        val myWorldContainer = UIContainers.horizontalFlow(Sizing.content(), Sizing.content())
+        myWorldContainer.surface(Surface.flat(0xC7000000.toInt()).and(Surface.blur(3f, 5f)).and(Surface.outline(0xFF121212.toInt())))
+        myWorldContainer.padding(Insets.of(2))
+        myWorldContainer.positioning(Positioning.absolute(MY_WORLD_MARGIN, height - MY_WORLD_MARGIN - TOOLBAR_HEIGHT))
+
+        val myWorldButton = UIComponents.button(Component.literal("Me")) { jumpToPlayerWorld() }
+        myWorldButton.sizing(Sizing.fixed(24), Sizing.fixed(20))
+        myWorldButton.renderer(TOOLBAR_BUTTON_RENDERER)
+
+        myWorldContainer.child(myWorldButton)
+        rootComponent.child(myWorldContainer)
     }
 
     override fun init() {
@@ -116,6 +130,19 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
             GLFW.glfwGetKey(handle, GLFW.GLFW_KEY_RIGHT_SHIFT) == GLFW.GLFW_PRESS
     }
 
+    /** Maps the player's current dimension to the keyword [BrowserManager.jumpToWorld] matches on. */
+    private fun jumpToPlayerWorld() {
+        val player = mc.player ?: return
+        val dimensionPath = player.level().dimension().identifier().path
+        val keyword = when (dimensionPath) {
+            "overworld" -> "overworld"
+            "the_nether" -> "nether"
+            "the_end" -> "end"
+            else -> dimensionPath
+        }
+        BrowserManager.jumpToWorld(keyword)
+    }
+
     private fun navigateToUrlBox() {
         var text = urlBox.value.trim()
         if (text.isEmpty()) return
@@ -137,7 +164,7 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
         val s = surface
         val hasFrame = s?.browser()?.latestFrame()?.isPresent == true
         if (s != null && hasFrame) {
-            s.render(context, 0, 0, width, height)
+            s.render(context, 0, TOOLBAR_HEIGHT, width, viewportHeight())
             context.requestCursor(cursor(s))
         } else {
             renderLoadingScreen(context, if (s == null) "Initializing browser..." else "Loading page...")
@@ -157,15 +184,18 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
     }
 
     private fun renderLoadingScreen(context: GuiGraphics, message: String) {
-        context.fill(0, 0, width, height, 0xCC000000.toInt())
+        context.fill(0, TOOLBAR_HEIGHT, width, height, 0xCC000000.toInt())
         context.drawCenteredString(
             mc.font,
             message,
             width / 2,
-            height / 2 - 10,
+            TOOLBAR_HEIGHT + viewportHeight() / 2 - 10,
             0xFFFFFF
         )
     }
+
+    /** The browser viewport's on-screen height — everything below the toolbar. */
+    private fun viewportHeight(): Int = (height - TOOLBAR_HEIGHT).coerceAtLeast(1)
 
     private fun cursor(s: BrowserSurface): CursorType = when (s.browser().requestedCursor()) {
         BrowserCursor.CROSSHAIR -> CursorTypes.CROSSHAIR
@@ -179,35 +209,46 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
     }
 
     // --- Mouse input forwarding ---
-    // The input adapter maps GUI-scaled coordinates (relative to the full-screen surface,
-    // origin at 0,0) into the browser's fixed pixel resolution internally.
+    // The input adapter maps GUI-scaled coordinates into the browser's fixed pixel resolution
+    // internally; the viewport starts below the toolbar, at (0, TOOLBAR_HEIGHT).
 
     private fun hasOpenDropdown(): Boolean =
         uiAdapter.rootComponent.children().any { it is DropdownComponent }
 
+    /** Bottom-left "Me" button's screen bounds — kept in sync with its [build] positioning/sizing. */
+    private fun isPointInMyWorldButton(x: Double, y: Double): Boolean {
+        val x0 = MY_WORLD_MARGIN.toDouble()
+        val y0 = (height - MY_WORLD_MARGIN - TOOLBAR_HEIGHT).toDouble()
+        return x >= x0 && x <= x0 + MY_WORLD_BUTTON_WIDTH && y >= y0 && y <= y0 + TOOLBAR_HEIGHT
+    }
+
     override fun mouseClicked(event: MouseButtonEvent, isDoubleClick: Boolean): Boolean {
         // Right-click (button 1) over the map area → open the CrowMap context popup
-        if (event.button() == GLFW.GLFW_MOUSE_BUTTON_RIGHT && event.y() >= TOOLBAR_HEIGHT) {
+        if (event.button() == GLFW.GLFW_MOUSE_BUTTON_RIGHT &&
+            event.y() >= TOOLBAR_HEIGHT &&
+            !isPointInMyWorldButton(event.x(), event.y())
+        ) {
             ContextPopup.open(
                 screen = this,
                 root = uiAdapter.rootComponent,
                 browserPixelX = BrowserManager.surface?.toBrowserX(event.x(), width) ?: 0,
-                browserPixelY = BrowserManager.surface?.toBrowserY(event.y(), height) ?: 0,
+                browserPixelY = BrowserManager.surface?.toBrowserY(event.y() - TOOLBAR_HEIGHT, viewportHeight()) ?: 0,
                 guiX = event.x(),
                 guiY = event.y()
             )
             return true
         }
-        // If a dropdown is open, or the click is on the toolbar, let owo-ui consume the click
-        // and suppress forwarding to the browser — the user is interacting with UI, not the map.
-        if (hasOpenDropdown() || event.y() < TOOLBAR_HEIGHT) {
+        // If a dropdown is open, or the click is on the toolbar or the "Me" button, let owo-ui
+        // consume the click and suppress forwarding to the browser — the user is interacting
+        // with UI, not the map.
+        if (hasOpenDropdown() || event.y() < TOOLBAR_HEIGHT || isPointInMyWorldButton(event.x(), event.y())) {
             suppressBrowserMouseButton = true
             super.mouseClicked(event, isDoubleClick)
             return true
         }
         suppressBrowserMouseButton = false
         BrowserManager.inputAdapter?.mouseButton(
-            event.x(), event.y(), 0, 0, width, height,
+            event.x(), event.y(), 0, TOOLBAR_HEIGHT, width, viewportHeight(),
             event.button(), true, if (isDoubleClick) 2 else 1, event.modifiers()
         )
         super.mouseClicked(event, isDoubleClick)
@@ -221,7 +262,7 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
             return true
         }
         BrowserManager.inputAdapter?.mouseButton(
-            event.x(), event.y(), 0, 0, width, height,
+            event.x(), event.y(), 0, TOOLBAR_HEIGHT, width, viewportHeight(),
             event.button(), false, 0, event.modifiers()
         )
         super.mouseReleased(event)
@@ -229,14 +270,14 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
     }
 
     override fun mouseMoved(mouseX: Double, mouseY: Double) {
-        BrowserManager.inputAdapter?.mouseMoved(mouseX, mouseY, 0, 0, width, height, 0)
+        BrowserManager.inputAdapter?.mouseMoved(mouseX, mouseY, 0, TOOLBAR_HEIGHT, width, viewportHeight(), 0)
         super.mouseMoved(mouseX, mouseY)
     }
 
     override fun mouseScrolled(mouseX: Double, mouseY: Double, horizontalAmount: Double, verticalAmount: Double): Boolean {
         if (super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount)) return true
         BrowserManager.inputAdapter?.mouseScrolled(
-            mouseX, mouseY, 0, 0, width, height, horizontalAmount, verticalAmount, 0
+            mouseX, mouseY, 0, TOOLBAR_HEIGHT, width, viewportHeight(), horizontalAmount, verticalAmount, 0
         )
         return true
     }
@@ -245,7 +286,7 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
         if (suppressBrowserMouseButton) {
             return super.mouseDragged(click, deltaX, deltaY)
         }
-        BrowserManager.inputAdapter?.mouseDragged(click.x(), click.y(), 0, 0, width, height, click.modifiers())
+        BrowserManager.inputAdapter?.mouseDragged(click.x(), click.y(), 0, TOOLBAR_HEIGHT, width, viewportHeight(), click.modifiers())
         return true
     }
 
@@ -287,6 +328,11 @@ class BrowserScreen : BaseOwoScreen<FlowLayout>(Component.literal("CrowMap Brows
 
     companion object {
         private const val TOOLBAR_HEIGHT = 24
+        private const val MY_WORLD_MARGIN = 0
+
+        // Button (24) + container padding (2 on each side) — must match the myWorldContainer/
+        // myWorldButton sizing/padding set up in build().
+        private const val MY_WORLD_BUTTON_WIDTH = 24
 
         // Matches DropdownComponent.Button's own hover fill (0x44FFFFFF), transparent otherwise —
         // same look as the jump-menu popup entries instead of vanilla's 3D-bevel button sprite.

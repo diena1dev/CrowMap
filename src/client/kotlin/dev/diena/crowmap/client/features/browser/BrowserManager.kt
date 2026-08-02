@@ -2,6 +2,7 @@ package dev.diena.crowmap.client.features.browser
 
 import dev.diena.crowmap.client.CrowmapClient
 import dev.diena.crowmap.client.config.CrowmapConfig
+import dev.diena.crowmap.client.features.liveatlas.LocalLiveAtlasServer
 import io.github.trethore.graphene.api.browser.BrowserLoadCompleted
 import io.github.trethore.graphene.api.browser.BrowserLoadFailed
 import io.github.trethore.graphene.api.browser.BrowserLoadListener
@@ -88,7 +89,12 @@ object BrowserManager {
     /**
      * Returns the URL the browser should load.
      */
-    fun getTargetUrl(): String = CrowmapConfig.mapUrl
+    fun getTargetUrl(): String =
+        if (CrowmapConfig.useLocalLiveAtlas && LocalLiveAtlasServer.state == LocalLiveAtlasServer.State.READY) {
+            LocalLiveAtlasServer.localUrl
+        } else {
+            CrowmapConfig.mapUrl
+        }
 
     /**
      * Creates or returns the shared browser surface with the configured URL, at the given
@@ -347,6 +353,91 @@ object BrowserManager {
 
     /** Shows the sidebar/coordinate display again — call while the full-screen view is open. */
     fun showFullScreenChrome() = removeCss(HUD_CHROME_CSS_ID)
+
+    // ── Jump to the player's current world ────────────────────────────────
+
+    /**
+     * Switches the page's active map to whichever of its worlds corresponds to [dimensionKeyword]
+     * — a no-op if no matching world is configured on this Dynmap instance (i.e. the player's
+     * current dimension just isn't mapped there).
+     *
+     * [dimensionKeyword] should be one of `"overworld"`, `"nether"`, `"end"`, or a raw dimension
+     * path for anything else (custom/modded dimensions) — see the call site in [dev.diena.crowmap.client.screen.BrowserScreen].
+     *
+     * World-name matching is a suffix/substring heuristic (`_nether`/`DIM-1` → nether,
+     * `_end`/`DIM1` → end, else overworld), because there's no authoritative client-side mapping
+     * from a Minecraft dimension to a Dynmap world name — this mirrors the convention Dynmap's
+     * own client JS uses internally (see `map.js`'s world-icon selection) for the same reason.
+     *
+     * Legacy Dynmap exposes `window.dynmap.selectWorld(name)`/`window.dynmap.worlds` (an object
+     * keyed by world name) for exactly this. LiveAtlas has no public switch function, so this
+     * reaches into its Vuex-like store directly (`store.commit('setCurrentMap', ...)`, the same
+     * mutation `WorldListItem.vue`'s world/map radio buttons trigger) and its `store.state.worlds`
+     * (a JS `Map`).
+     */
+    fun jumpToWorld(dimensionKeyword: String) {
+        val js = """
+            (function() {
+                var keyword = '$dimensionKeyword';
+
+                function matchesKeyword(name) {
+                    var n = (name || '').toLowerCase();
+                    if (keyword === 'nether') return n.indexOf('nether') !== -1 || n === 'dim-1';
+                    if (keyword === 'end') return n.indexOf('the_end') !== -1 || n.indexOf('_end') !== -1 || n === 'dim1';
+                    if (keyword === 'overworld') {
+                        return n.indexOf('nether') === -1 && n.indexOf('_end') === -1 && n !== 'dim-1' && n !== 'dim1';
+                    }
+                    return n.indexOf(keyword) !== -1;
+                }
+
+                function firstMapName(maps) {
+                    if (!maps) return null;
+                    if (typeof maps.values === 'function') {
+                        var it = maps.values().next();
+                        return it.done ? null : it.value.name;
+                    }
+                    if (Array.isArray(maps)) return maps.length ? maps[0].name : null;
+                    var keys = Object.keys(maps);
+                    return keys.length ? maps[keys[0]].name : null;
+                }
+
+                // Strategy 1: LiveAtlas
+                try {
+                    var appEl = document.querySelector('#app');
+                    if (appEl && appEl.__vue_app__) {
+                        var store = appEl.__vue_app__.config.globalProperties.${'$'}store;
+                        var worldsMap = store && store.state && store.state.worlds;
+                        if (worldsMap && typeof worldsMap.values === 'function') {
+                            var candidates = Array.from(worldsMap.values());
+                            for (var i = 0; i < candidates.length; i++) {
+                                if (!matchesKeyword(candidates[i].name)) continue;
+                                var mapName = firstMapName(candidates[i].maps);
+                                if (mapName) {
+                                    store.commit('setCurrentMap', { worldName: candidates[i].name, mapName: mapName });
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                } catch (_) {}
+
+                // Strategy 2: Legacy Dynmap
+                try {
+                    if (window.dynmap && window.dynmap.worlds && window.dynmap.selectWorld) {
+                        var names = Object.keys(window.dynmap.worlds);
+                        for (var j = 0; j < names.length; j++) {
+                            if (matchesKeyword(names[j])) {
+                                window.dynmap.selectWorld(names[j]);
+                                return;
+                            }
+                        }
+                    }
+                } catch (_) {}
+            })();
+        """.trimIndent()
+
+        WebDataReader.executeJs(js)
+    }
 
     // ── Internal CSS helpers ─────────────────────────────────────────────
 

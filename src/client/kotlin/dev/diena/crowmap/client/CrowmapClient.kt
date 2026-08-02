@@ -5,6 +5,7 @@ import dev.diena.crowmap.client.features.browser.BrowserManager
 import dev.diena.crowmap.client.features.browser.PlayerMapMarker
 import dev.diena.crowmap.client.features.hud.MapHudOverlay
 import dev.diena.crowmap.client.features.hud.OverlayHud
+import dev.diena.crowmap.client.features.liveatlas.LocalLiveAtlasServer
 import dev.diena.crowmap.client.features.world.SignAnchorTracker
 import io.github.trethore.graphene.api.Graphene
 import io.github.trethore.graphene.api.GrapheneContext
@@ -51,8 +52,17 @@ class CrowmapClient : ClientModInitializer {
         // Register with Graphene before touching any browser APIs
         grapheneContext = Graphene.register(CrowmapClient::class.java)
 
-        // LiveAtlas support is dropped; dev.diena.crowmap.client.features.liveatlas.LocalLiveAtlasServer
-        // is kept in the tree but intentionally unwired.
+        // LiveAtlas: react to the config toggle at runtime, and start it now if already enabled.
+        // BrowserManager.getTargetUrl() also checks LocalLiveAtlasServer.state directly, so any
+        // browser session created after the server becomes ready picks the local URL up on its
+        // own — these navigate() calls are just to redirect a session that's already loaded.
+        LocalLiveAtlasServer.registerConfigWatcher(
+            onEnable = { url -> BrowserManager.navigate(url) },
+            onDisable = { BrowserManager.navigate(CrowmapConfig.mapUrl) }
+        )
+        if (CrowmapConfig.useLocalLiveAtlas) {
+            LocalLiveAtlasServer.startAsync { BrowserManager.navigate(LocalLiveAtlasServer.localUrl) }
+        }
 
         // Initialize Graphene browser backend
         BrowserManager.init()
