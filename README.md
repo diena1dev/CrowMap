@@ -2,7 +2,7 @@
 
 A Fabric client-side mod for Minecraft 1.21.11 that embeds a browser directly in-game, with an in-world map projection, and HUD minimap.
 
-Built on the amazing owo-lib and a forked version of MCEF!
+Built on the amazing owo-lib and the Graphene project!
 
 ---
 
@@ -71,4 +71,4 @@ It can also be opened with the command `/owo-config crowmap`.
 - Fabric Loader
 - Fabric API
 - owo-lib (embedded via mod jar (aka don't also install the mod))
-- MCEF (embedded via mod jar (same thing))
+- Graphene (embedded via mod jar (same thing))
