@@ -5,6 +5,7 @@
 
   "text.config.crowmap-config.section.Browser": "Browser",
   "text.config.crowmap-config.option.mapUrl": "Map URL",
+  "text.config.crowmap-config.option.showUrlBar":"Show URL Bar",
   "text.config.crowmap-config.option.mapUrl.tooltip": "URL of the Dynmap instance to load.",
   "text.config.crowmap-config.option.useLocalLiveAtlas": "Use Local LiveAtlas",
   "text.config.crowmap-config.option.useLocalLiveAtlas.tooltip": "Hosts LiveAtlas locally and proxies all Dynmap requests through it, replacing the default Dynmap UI. Downloads ~150 KB on first use. Disable on low-end hardware.",
